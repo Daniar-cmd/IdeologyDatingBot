@@ -2,10 +2,98 @@ require('dotenv').config()
 
 const TelegramApi = require('node-telegram-bot-api')
 const token = process.env.BOT_TOKEN
+const db = require('./database')
 const bot = new TelegramApi(token, { polling: true })
 
 const inviteCode = 'YABLOKO'
-const users = {}
+function loadUsers() {
+    const rows = db.prepare('SELECT * FROM users').all()
+    const loadedUsers = {}
+
+    for (const row of rows) {
+        const user = {
+            username: row.username || undefined,
+            registered: Boolean(row.registered),
+            name: row.name || undefined,
+            gender: row.gender || undefined,
+            age: row.age ?? undefined,
+            description: row.description || '',
+            city: row.city || undefined,
+            photos: JSON.parse(row.photos || '[]'),
+            likes: JSON.parse(row.likes || '[]'),
+            likedBy: JSON.parse(row.liked_by || '[]'),
+            viewed: JSON.parse(row.viewed || '[]')
+        }
+
+        if (row.state) {
+            user[row.state] = true
+        }
+
+        loadedUsers[row.chat_id] = user
+    }
+
+    console.log(`Загружено анкет: ${rows.length}`)
+
+    return loadedUsers
+}
+
+const users = loadUsers()
+
+function saveAllUsers() {
+    const statement = db.prepare(`
+        INSERT INTO users (
+            chat_id, username, registered, name, gender, age,
+            description, city, photos, likes, liked_by, viewed, state
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(chat_id) DO UPDATE SET
+            username = excluded.username,
+            registered = excluded.registered,
+            name = excluded.name,
+            gender = excluded.gender,
+            age = excluded.age,
+            description = excluded.description,
+            city = excluded.city,
+            photos = excluded.photos,
+            likes = excluded.likes,
+            liked_by = excluded.liked_by,
+            viewed = excluded.viewed,
+            state = excluded.state
+    `)
+
+    const transaction = db.transaction(() => {
+        for (const [chatID, user] of Object.entries(users)) {
+            const state = Object.keys(user).find(
+                key => key.startsWith('waitingFor') && user[key] === true
+            ) || null
+
+            statement.run(
+                String(chatID),
+                user.username || null,
+                user.registered ? 1 : 0,
+                user.name || null,
+                user.gender || null,
+                user.age ?? null,
+                user.description || '',
+                user.city || null,
+                JSON.stringify(user.photos || []),
+                JSON.stringify(user.likes || []),
+                JSON.stringify(user.likedBy || []),
+                JSON.stringify(user.viewed || []),
+                state
+            )
+        }
+    })
+    transaction()
+}
+
+setInterval(() => {
+    try {
+        saveAllUsers()
+    } catch (error) {
+        console.error('Ошибка сохранения анкет:', error)
+    }
+}, 1000)
 
 function findMatch(chatID) {
     const user = users[chatID]
@@ -15,6 +103,12 @@ function findMatch(chatID) {
             continue
         }
         const otherUser = users[otherChatID]
+
+        // Пропускаем анкеты, с которыми уже взаимодействовали
+        if (user.viewed?.includes(Number(otherChatID))) {
+            continue
+        }
+
         if (!otherUser?.registered) {
             continue
         }
@@ -30,7 +124,7 @@ function findMatch(chatID) {
         if (user.city.toLowerCase() !== otherUser.city.toLowerCase()) {
             continue
         }
-        if (Math.abs(user.age - otherUser.age) > 3) {
+        if (Math.abs(user.age - otherUser.age) > 10) {
             continue
         }
         matches.push({
@@ -45,13 +139,116 @@ function findMatch(chatID) {
     return matches[randomIndex]
 }
 
+async function sendDatingProfile(chatID, otherChatID) {
+    const user = users[otherChatID]
+
+    const profileText = `👤 ${user.name}, ${user.age}
+🌍 ${user.city}
+
+${user.description || ''}`
+
+    try {
+        if (user.photos.length === 1) {
+            await bot.sendPhoto(chatID, user.photos[0], {
+                caption: profileText,
+                reply_markup: {
+                    inline_keyboard: [[
+                        { text: '❤️', callback_data: `like_${otherChatID}` },
+                        { text: '❌', callback_data: `skip_${otherChatID}` }
+                    ]]
+                }
+            })
+            return
+        }
+
+        const media = user.photos.map((photo, index) => ({
+            type: 'photo',
+            media: photo,
+            ...(index === 0 ? { caption: profileText } : {})
+        }))
+
+        const sentMessages = await bot.sendMediaGroup(chatID, media)
+
+        const lastMessage = sentMessages[sentMessages.length - 1]
+
+        await bot.sendMessage(chatID, 'Выберите действие:', {
+            reply_markup: {
+                inline_keyboard: [[
+                    { text: '❤️', callback_data: `like_${otherChatID}` },
+                    { text: '❌', callback_data: `skip_${otherChatID}` }
+                ]]
+            },
+            reply_to_message_id: lastMessage.message_id
+        })
+    } catch (error) {
+        console.error('Ошибка отправки анкеты:', error.message)
+        bot.sendMessage(chatID, '❌ Не удалось отправить анкету. Попробуйте позже.')
+    }
+}
+
+// ПОКАЗ СОБСТВЕННОЙ АНКЕТЫ
+function sendProfile(chatID, user) {
+    const profileText = `👤 ${user.name}, ${user.age}
+🌍 ${user.city}
+
+${user.description || ''}`
+
+    bot.sendPhoto(
+        chatID,
+        user.photos[0],
+        {
+            caption: profileText
+        }
+    ).catch(error => {
+        console.error('Ошибка показа собственной анкеты:', error.message)
+        bot.sendMessage(
+            chatID,
+            '❌ Не удалось показать анкету. Попробуйте позже.'
+        )
+    })
+}
+
+
+function sendLikeBackProfile(chatID, otherChatID) {
+    const user = users[otherChatID]
+
+    if (!user || !user.photos || user.photos.length === 0) {
+        bot.sendMessage(chatID, 'Не удалось загрузить анкету пользователя.')
+        return
+    }
+
+    const profileText = `❤️ Этот человек поставил вам лайк!
+
+👤 ${user.name}, ${user.age}
+🌍 ${user.city}
+
+${user.description || ''}
+
+Симпатия взаимна?`
+
+    bot.sendPhoto(chatID, user.photos[0], {
+        caption: profileText,
+        reply_markup: {
+            inline_keyboard: [
+                [
+                    { text: '❤️ Лайкнуть в ответ', callback_data: `match_${otherChatID}` },
+                    { text: '❌', callback_data: `reject_${otherChatID}` }
+                ]
+            ]
+        }
+    })
+} 
+
 bot.on('message', msg => {
     const chatID = msg.chat.id
     const text = msg.text
     if (!users[chatID]) {
-    users[chatID] = {}
-}
-users[chatID].username = msg.from.username
+        users[chatID] = {
+            registered: false
+        }
+    }
+
+    users[chatID].username = msg.from.username || null
 
     //ПРИВЕТСТВИЕ
     if (text === '/start') {
@@ -86,13 +283,24 @@ if (users[chatID]?.waitingForInvite) {
 }
 
 // ВЫБЕРИТЕ ИМЯ
+// ВЫБЕРИТЕ ИМЯ
 if (users[chatID]?.waitingForName) {
-    users[chatID].name = text
+    // Проверяем, что пользователь отправил текст
+    if (!text || !/\p{L}/u.test(text)) {
+        bot.sendMessage(
+            chatID,
+            '❌ Имя должно содержать хотя бы одну букву.\n\nПопробуйте ещё раз.\n'
+        )
+        return
+    }
+
+    users[chatID].name = text.trim()
     users[chatID].waitingForName = false
     users[chatID].waitingForGender = true
+
     bot.sendMessage(
         chatID,
-        `Отлично, ${text}! Ваше имя сохранено.\n\nТеперь выберите ваш пол:`,
+        `Отлично, ${users[chatID].name}! Ваше имя сохранено.\n\nТеперь выберите ваш пол:`,
         {
             reply_markup: {
                 keyboard: [
@@ -269,23 +477,23 @@ if (users[chatID].photos.length === 5) {
 // ПРОСМОТР СВОЕЙ АНКЕТЫ
 if (text === '/profile') {
     const user = users[chatID]
-    if (!user || !user.registered || !user.name || !user.age || !user.city || !user.photos?.length) {
+
+    if (
+        !user ||
+        !user.registered ||
+        !user.name ||
+        !user.age ||
+        !user.city ||
+        !user.photos?.length
+    ) {
         bot.sendMessage(
             chatID,
             '❌ Вы ещё не завершили создание анкеты.'
         )
         return
     }
+
     sendProfile(chatID, user)
-    const otherUser = findMatch(chatID)
-    if (!otherUser) {
-        bot.sendMessage(
-            chatID,
-            '😔 Пока не найдено подходящих анкет.\n\nПопробуйте зайти позже.'
-        )
-        return
-    }
-    sendProfile(chatID, otherUser)
     return
 }
 
@@ -310,32 +518,99 @@ if (text === '/lenta') {
     return
 }
 
-function sendDatingProfile(chatID, otherChatID) {
-    const user = users[otherChatID]
-    const profileText = `👤 ${user.name}, ${user.age}
-🌍 ${user.city}
-${user.description }`
-    bot.sendPhoto(
-        chatID,
-        user.photos[0],
-        {
-            caption: profileText,
-            reply_markup: {
-                inline_keyboard: [
-                    [
-                        { text: '❤️', callback_data: `like_${otherChatID}` },
-                        { text: '❌', callback_data: `skip_${otherChatID}` }
-                    ]
-                ]
-            }
-        }
-    )
-}
+})
 
 bot.on('callback_query', query => {
     const chatID = query.message.chat.id
     const data = query.data
     const user = users[chatID]
+
+    // ОТВЕТ НА ВХОДЯЩИЙ ЛАЙК
+if (data.startsWith('match_')) {
+    const otherChatID = Number(data.replace('match_', ''))
+    const likedUser = users[otherChatID]
+
+    if (!likedUser) {
+        bot.answerCallbackQuery(query.id, {
+            text: 'Анкета больше недоступна.'
+        })
+        return
+    }
+
+    // Проверяем, действительно ли этот пользователь ранее поставил лайк
+    if (!likedUser.likes || !likedUser.likes.includes(chatID)) {
+        bot.answerCallbackQuery(query.id, {
+            text: 'Этот лайк уже недействителен.'
+        })
+        return
+    }
+
+    // Записываем взаимный лайк
+    if (!user.likes) {
+        user.likes = []
+    }
+
+    if (!user.likes.includes(otherChatID)) {
+        user.likes.push(otherChatID)
+    }
+
+    bot.answerCallbackQuery(query.id, {
+        text: '❤️ У вас взаимная симпатия!'
+    })
+
+    // Убираем кнопки, чтобы ответ нельзя было отправить повторно
+    bot.editMessageReplyMarkup(
+        { inline_keyboard: [] },
+        {
+            chat_id: chatID,
+            message_id: query.message.message_id
+        }
+    ).catch(() => {})
+
+    // Получаем Telegram username обоих пользователей
+    const currentUsername = user.username
+        ? `@${user.username}`
+        : 'Username не указан'
+
+    const otherUsername = likedUser.username
+        ? `@${likedUser.username}`
+        : 'Username не указан'
+
+    // Уведомляем обоих участников
+    bot.sendMessage(
+        chatID,
+        `🎉 Это мэтч!\n\n❤️ Вы понравились друг другу!\n\nTelegram пользователя: ${otherUsername}`
+    )
+
+    bot.sendMessage(
+        otherChatID,
+        `🎉 Это мэтч!\n\n❤️ Вы понравились друг другу!\n\nTelegram пользователя: ${currentUsername}`
+    )
+
+    return
+}
+
+// ОТКЛОНЕНИЕ ВХОДЯЩЕГО ЛАЙКА
+if (data.startsWith('reject_')) {
+    bot.answerCallbackQuery(query.id, {
+        text: 'Вы пропустили эту анкету.'
+    })
+
+    bot.editMessageReplyMarkup(
+        { inline_keyboard: [] },
+        {
+            chat_id: chatID,
+            message_id: query.message.message_id
+        }
+    ).catch(() => {})
+
+    bot.sendMessage(
+        chatID,
+        'Вы пропустили эту анкету. Продолжайте знакомиться в /lenta!'
+    )
+
+    return
+}
 
     if (!user) {
         bot.answerCallbackQuery(query.id)
@@ -345,6 +620,16 @@ bot.on('callback_query', query => {
     if (data.startsWith('skip_')) {
         const otherChatID = Number(data.replace('skip_', ''))
 
+        bot.answerCallbackQuery(query.id)
+
+        bot.editMessageReplyMarkup(
+            { inline_keyboard: [] },
+            {
+                chat_id: chatID,
+                message_id: query.message.message_id
+            }
+        ).catch(() => {})
+
         if (!user.viewed) {
             user.viewed = []
         }
@@ -352,9 +637,6 @@ bot.on('callback_query', query => {
         if (!user.viewed.includes(otherChatID)) {
             user.viewed.push(otherChatID)
         }
-
-        bot.answerCallbackQuery(query.id)
-        bot.deleteMessage(chatID, query.message.message_id)
 
         const nextProfile = findMatch(chatID)
 
@@ -373,6 +655,15 @@ bot.on('callback_query', query => {
     if (data.startsWith('like_')) {
         const otherChatID = Number(data.replace('like_', ''))
         const likedUser = users[otherChatID]
+
+        bot.answerCallbackQuery(query.id)
+        bot.editMessageReplyMarkup(
+            { inline_keyboard: [] },
+            {
+                chat_id: chatID,
+                message_id: query.message.message_id
+            }
+        ).catch(() => {})
 
         if (!likedUser) {
             bot.answerCallbackQuery(query.id)
@@ -399,14 +690,7 @@ bot.on('callback_query', query => {
             user.viewed.push(otherChatID)
         }
 
-        bot.answerCallbackQuery(
-            query.id,
-            {
-                text: '❤️ Лайк отправлен!'
-            }
-        )
-
-        bot.deleteMessage(chatID, query.message.message_id)
+        bot.sendMessage(chatID, '❤️ Лайк отправлен! Ждём ответа.')
 
         bot.sendMessage(
             chatID,
@@ -419,8 +703,11 @@ bot.on('callback_query', query => {
 
         bot.sendMessage(
             otherChatID,
-            `❤️ Ваша анкета понравилась пользователю ${user.name}!`
-        )
+            `❤️ Ваша анкета понравилась пользователю ${user.name}!\n\nПосмотрите его анкету и решите, хотите ли вы ответить взаимностью.`).then(() => {
+            sendLikeBackProfile(otherChatID, chatID)
+        }).catch(error => {
+            console.error('Не удалось отправить уведомление о лайке:', error.message)
+        })
 
         const nextProfile = findMatch(chatID)
 
@@ -431,9 +718,6 @@ bot.on('callback_query', query => {
             )
             return
         }
-
         sendDatingProfile(chatID, nextProfile.chatID)
     }
-})
-
 })
