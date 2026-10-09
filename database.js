@@ -1,24 +1,32 @@
-const Database = require('better-sqlite3')
-const db = new Database('dating.db')
+const { Pool } = require('pg')
 
-db.pragma('journal_mode = WAL')
+const db = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+        rejectUnauthorized: false
+    }
+})
 
-db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-        chat_id TEXT PRIMARY KEY,
-        username TEXT,
-        registered INTEGER DEFAULT 0,
-        name TEXT,
-        gender TEXT,
-        age INTEGER,
-        description TEXT DEFAULT '',
-        city TEXT,
-        photos TEXT DEFAULT '[]',
-        likes TEXT DEFAULT '[]',
-        liked_by TEXT DEFAULT '[]',
-        viewed TEXT DEFAULT '[]',
-        state TEXT
-    )
-`)
+async function initDatabase() {
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS users (
+            chat_id TEXT PRIMARY KEY,
+            username TEXT,
+            registered INTEGER DEFAULT 0,
+            name TEXT,
+            gender TEXT,
+            age INTEGER,
+            description TEXT DEFAULT '',
+            city TEXT,
+            photos JSONB DEFAULT '[]'::jsonb,
+            likes JSONB DEFAULT '[]'::jsonb,
+            liked_by JSONB DEFAULT '[]'::jsonb,
+            viewed JSONB DEFAULT '[]'::jsonb,
+            state TEXT
+        )
+    `)
 
-module.exports = db
+    console.log('PostgreSQL: таблица users готова')
+}
+
+module.exports = { db, initDatabase }

@@ -2,15 +2,16 @@ require('dotenv').config()
 
 const TelegramApi = require('node-telegram-bot-api')
 const token = process.env.BOT_TOKEN
-const db = require('./database')
-const bot = new TelegramApi(token, { polling: true })
+const { db, initDatabase } = require('./database')
+const bot = new TelegramApi(token, { polling: false })
 
 const inviteCode = 'YABLOKO'
-function loadUsers() {
-    const rows = db.prepare('SELECT * FROM users').all()
-    const loadedUsers = {}
+const users = {}
 
-    for (const row of rows) {
+async function loadUsers() {
+    const result = await db.query('SELECT * FROM users')
+
+    for (const row of result.rows) {
         const user = {
             username: row.username || undefined,
             registered: Boolean(row.registered),
@@ -19,81 +20,70 @@ function loadUsers() {
             age: row.age ?? undefined,
             description: row.description || '',
             city: row.city || undefined,
-            photos: JSON.parse(row.photos || '[]'),
-            likes: JSON.parse(row.likes || '[]'),
-            likedBy: JSON.parse(row.liked_by || '[]'),
-            viewed: JSON.parse(row.viewed || '[]')
+            photos: row.photos || [],
+            likes: row.likes || [],
+            likedBy: row.liked_by || [],
+            viewed: row.viewed || []
         }
 
         if (row.state) {
             user[row.state] = true
         }
 
-        loadedUsers[row.chat_id] = user
+        users[row.chat_id] = user
     }
 
-    console.log(`Загружено анкет: ${rows.length}`)
-
-    return loadedUsers
+    console.log(`Загружено анкет: ${result.rows.length}`)
 }
 
-const users = loadUsers()
+async function saveAllUsers() {
+    for (const [chatID, user] of Object.entries(users)) {
+        const state = Object.keys(user).find(
+            key => key.startsWith('waitingFor') && user[key] === true
+        ) || null
 
-function saveAllUsers() {
-    const statement = db.prepare(`
-        INSERT INTO users (
-            chat_id, username, registered, name, gender, age,
-            description, city, photos, likes, liked_by, viewed, state
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(chat_id) DO UPDATE SET
-            username = excluded.username,
-            registered = excluded.registered,
-            name = excluded.name,
-            gender = excluded.gender,
-            age = excluded.age,
-            description = excluded.description,
-            city = excluded.city,
-            photos = excluded.photos,
-            likes = excluded.likes,
-            liked_by = excluded.liked_by,
-            viewed = excluded.viewed,
-            state = excluded.state
-    `)
-
-    const transaction = db.transaction(() => {
-        for (const [chatID, user] of Object.entries(users)) {
-            const state = Object.keys(user).find(
-                key => key.startsWith('waitingFor') && user[key] === true
-            ) || null
-
-            statement.run(
-                String(chatID),
-                user.username || null,
-                user.registered ? 1 : 0,
-                user.name || null,
-                user.gender || null,
-                user.age ?? null,
-                user.description || '',
-                user.city || null,
-                JSON.stringify(user.photos || []),
-                JSON.stringify(user.likes || []),
-                JSON.stringify(user.likedBy || []),
-                JSON.stringify(user.viewed || []),
-                state
+        await db.query(`
+            INSERT INTO users (
+                chat_id, username, registered, name, gender, age,
+                description, city, photos, likes, liked_by, viewed, state
             )
-        }
-    })
-    transaction()
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            ON CONFLICT (chat_id) DO UPDATE SET
+                username = EXCLUDED.username,
+                registered = EXCLUDED.registered,
+                name = EXCLUDED.name,
+                gender = EXCLUDED.gender,
+                age = EXCLUDED.age,
+                description = EXCLUDED.description,
+                city = EXCLUDED.city,
+                photos = EXCLUDED.photos,
+                likes = EXCLUDED.likes,
+                liked_by = EXCLUDED.liked_by,
+                viewed = EXCLUDED.viewed,
+                state = EXCLUDED.state
+        `, [
+            String(chatID),
+            user.username || null,
+            user.registered ? 1 : 0,
+            user.name || null,
+            user.gender || null,
+            user.age ?? null,
+            user.description || '',
+            user.city || null,
+            JSON.stringify(user.photos || []),
+            JSON.stringify(user.likes || []),
+            JSON.stringify(user.likedBy || []),
+            JSON.stringify(user.viewed || []),
+            state
+        ])
+    }
 }
 
 setInterval(() => {
-    try {
-        saveAllUsers()
-    } catch (error) {
+    saveAllUsers().catch(error => {
         console.error('Ошибка сохранения анкет:', error)
-    }
-}, 1000)
+    })
+}, 5000)
 
 function findMatch(chatID) {
     const user = users[chatID]
@@ -721,3 +711,19 @@ if (data.startsWith('reject_')) {
         sendDatingProfile(chatID, nextProfile.chatID)
     }
 })
+async function startBot() {
+    try {
+        await initDatabase()
+        await loadUsers()
+        await saveAllUsers()
+
+        await bot.startPolling()
+
+        console.log('Бот запущен и подключён к PostgreSQL!')
+    } catch (error) {
+        console.error('Ошибка запуска бота:', error)
+        process.exit(1)
+    }
+}
+
+startBot()
