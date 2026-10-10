@@ -4,6 +4,13 @@ const TelegramApi = require('node-telegram-bot-api')
 const token = process.env.BOT_TOKEN
 const { db, initDatabase } = require('./database')
 const bot = new TelegramApi(token, { polling: false })
+const User = require('./models/user')
+const UserRepository = require('./repositories/UserRepository')
+const RegistrationService = require('./services/RegistrationService')
+const LikeService = require('./services/LikeService')
+const MatchingService = require('./services/MatchingService')
+const ProfileService = require('./services/ProfileService')
+
 bot.setMyCommands([
     { command: 'start', description: 'Запустить бота, начать все заново' },
     { command: 'profile', description: 'Посмотреть свою анкету' },
@@ -13,75 +20,28 @@ bot.setMyCommands([
 const inviteCode = 'YABLOKO'
 const users = {}
 
+const userRepository = new UserRepository(db, User)
+const likeService = new LikeService(users)
+const matchingService = new MatchingService(users)
+const profileService = new ProfileService(users)
+const registrationService = new RegistrationService(
+    users,
+    User,
+    inviteCode
+)
+
 async function loadUsers() {
-    const result = await db.query('SELECT * FROM users')
+    const loadedUsers = await userRepository.findAll()
 
-    for (const row of result.rows) {
-        const user = {
-            username: row.username || undefined,
-            registered: Boolean(row.registered),
-            name: row.name || undefined,
-            gender: row.gender || undefined,
-            age: row.age ?? undefined,
-            description: row.description || '',
-            city: row.city || undefined,
-            photos: row.photos || [],
-            likes: row.likes || [],
-            likedBy: row.liked_by || [],
-            viewed: row.viewed || []
-        }
-
-        if (row.state) {
-            user[row.state] = true
-        }
-
-        users[row.chat_id] = user
+    for (const user of loadedUsers) {
+        users[user.chatID] = user
     }
 
-    console.log(`Загружено анкет: ${result.rows.length}`)
+    console.log(`Загружено анкет: ${loadedUsers.length}`)
 }
 
 async function saveAllUsers() {
-    for (const [chatID, user] of Object.entries(users)) {
-        const state = Object.keys(user).find(
-            key => key.startsWith('waitingFor') && user[key] === true
-        ) || null
-
-        await db.query(`
-            INSERT INTO users (
-                chat_id, username, registered, name, gender, age,
-                description, city, photos, likes, liked_by, viewed, state
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-            ON CONFLICT (chat_id) DO UPDATE SET
-                username = EXCLUDED.username,
-                registered = EXCLUDED.registered,
-                name = EXCLUDED.name,
-                gender = EXCLUDED.gender,
-                age = EXCLUDED.age,
-                description = EXCLUDED.description,
-                city = EXCLUDED.city,
-                photos = EXCLUDED.photos,
-                likes = EXCLUDED.likes,
-                liked_by = EXCLUDED.liked_by,
-                viewed = EXCLUDED.viewed,
-                state = EXCLUDED.state
-        `, [
-            String(chatID),
-            user.username || null,
-            user.registered ? 1 : 0,
-            user.name || null,
-            user.gender || null,
-            user.age ?? null,
-            user.description || '',
-            user.city || null,
-            JSON.stringify(user.photos || []),
-            JSON.stringify(user.likes || []),
-            JSON.stringify(user.likedBy || []),
-            JSON.stringify(user.viewed || []),
-            state
-        ])
-    }
+    await userRepository.saveAll(users)
 }
 
 setInterval(() => {
@@ -90,43 +50,7 @@ setInterval(() => {
     })
 }, 5000)
 
-function findMatch(chatID) {
-    const user = users[chatID]
-    const matches = []
-    for (const otherChatID in users) {
-        if (otherChatID === String(chatID)) {
-            continue
-        }
-        const otherUser = users[otherChatID]
 
-        // Пропускаем анкеты, с которыми уже взаимодействовали
-        if (user.viewed?.includes(Number(otherChatID))) {
-            continue
-        }
-
-        if (!otherUser?.registered) {
-            continue
-        }
-        if (!otherUser.name || !otherUser.age || !otherUser.city) {
-            continue
-        }
-        if (!otherUser.photos?.length) {
-            continue
-        }
-        if (user.gender === otherUser.gender) {
-            continue
-        }
-        matches.push({
-            chatID: Number(otherChatID),
-            user: otherUser
-        })
-    }
-    if (matches.length === 0) {
-        return null
-    }
-    const randomIndex = Math.floor(Math.random() * matches.length)
-    return matches[randomIndex]
-}
 
 async function sendDatingProfile(chatID, otherChatID) {
     const user = users[otherChatID]
@@ -251,19 +175,24 @@ bot.on('message', msg => {
     return
     }
     if (!users[chatID]) {
-        users[chatID] = {
+        users[chatID] = new User({
+            chatID: Number(chatID),
+            username: msg.from.username || null,
             registered: false
-        }
+        })
     }
 
     users[chatID].username = msg.from.username || null
 
     //ПРИВЕТСТВИЕ
     if (text === '/start') {
-        users[chatID] = {
-            registered: false,
-            waitingForInvite: true
-        }
+    users[chatID] = new User({
+        chatID: Number(chatID),
+        username: msg.from.username || null,
+        registered: false
+    })
+
+    users[chatID].waitingForInvite = true
         bot.sendMessage(
             chatID,
             'Привет! Это IdeologyDatingBot. Здесь ты сможешь найти друзей или вторую половинку на основании общих взглядов, ценностей и мировоззрения.\n\nВведите инвайт-код для входа в систему:'
@@ -273,174 +202,163 @@ bot.on('message', msg => {
 
 // ВВЕДИТЕ ИНВАЙТ И ИМЯ
 if (users[chatID]?.waitingForInvite) {
-    if (text === inviteCode) {
-        users[chatID].registered = true
-        users[chatID].waitingForInvite = false
-        users[chatID].waitingForName = true
-        bot.sendMessage(
-            chatID,
-            '✅ Инвайт-код принят! Вы успешно вошли в систему.\n\n👤 Давайте создадим ваш профиль.\n\nКак вас зовут?'
-        )
-        return
-    }
-    bot.sendMessage(
-        chatID,
-        '❌ Неверный инвайт-код. Попробуйте ещё раз.'
-    )
+const result = registrationService.validateInvite(chatID, text)
+
+if (!result.success) {
+    bot.sendMessage(chatID, result.message)
     return
+}
+bot.sendMessage(
+    chatID,
+    '✅ Инвайт-код принят! Вы успешно вошли в систему.\n\n👤 Давайте создадим ваш профиль.\n\nКак вас зовут?'
+)
+return
+
 }
 
 // ВЫБЕРИТЕ ИМЯ
 // ВЫБЕРИТЕ ИМЯ
 if (users[chatID]?.waitingForName) {
-    // Проверяем, что пользователь отправил текст
-    if (!text || !/\p{L}/u.test(text)) {
-        bot.sendMessage(
-            chatID,
-            '❌ Имя должно содержать хотя бы одну букву.\n\nПопробуйте ещё раз.\n'
-        )
-        return
-    }
+const result = registrationService.setName(chatID, text)
 
-    users[chatID].name = text.trim()
-    users[chatID].waitingForName = false
-    users[chatID].waitingForGender = true
-
+if (!result.success) {
     bot.sendMessage(
         chatID,
-        `Отлично, ${users[chatID].name}! Ваше имя сохранено.\n\nТеперь выберите ваш пол:`,
-        {
-            reply_markup: {
-                keyboard: [
-                    ['👨 Мужской', '👩 Женский']
-                ],
-                resize_keyboard: true,
-                one_time_keyboard: true
-            }
-        }
+        result.message || '❌ Не удалось сохранить имя. Попробуйте ещё раз.'
     )
     return
+}
+bot.sendMessage(
+    chatID,
+    `Отлично, ${result.user.name}! Ваше имя сохранено.\n\nТеперь выберите ваш пол:`,
+    {
+        reply_markup: {
+            keyboard: [
+                ['👨 Мужской', '👩 Женский']
+            ],
+            resize_keyboard: true,
+            one_time_keyboard: true
+        }
+    }
+)
+return
+
 }
 
 // ПРОВЕРКА ПОЛА
 if (users[chatID]?.waitingForGender) {
-    if (text === '👨 Мужской') {
-        users[chatID].gender = 'male'
-    } else if (text === '👩 Женский') {
-        users[chatID].gender = 'female'
-    } else {
-        bot.sendMessage(
-            chatID,
-            'Пожалуйста, выберите один из вариантов с помощью кнопок.'
-        )
-        return
-    }
-    users[chatID].waitingForGender = false
-    users[chatID].waitingForAge = true
+const result = registrationService.setGender(chatID, text)
+
+if (!result.success) {
     bot.sendMessage(
         chatID,
-        '✅ Пол сохранён.\n\n🎂 Сколько вам лет?\n\nМинимальный возраст для регистрации — 16 лет.\n\n⚠️ Пожалуйста, указывайте реальный возраст. Подделка возраста недопустима.',
-        {
-            reply_markup: {
-                remove_keyboard: true
-            }
-        }
+        result.message || 'Не удалось сохранить пол. Попробуйте ещё раз.'
     )
     return
+}
+bot.sendMessage(
+    chatID,
+    '✅ Пол сохранён.\n\n🎂 Сколько вам лет?\n\nМинимальный возраст для регистрации — 16 лет.\n\n⚠️ Пожалуйста, указывайте реальный возраст. Подделка возраста недопустима.',
+    {
+        reply_markup: {
+            remove_keyboard: true
+        }
+    }
+)
+return
+
 }
 
 // ПРОВЕРКА ВОЗРАСТА
 if (users[chatID]?.waitingForAge) {
-    const age = Number(text)
-    if (!/^\d{2}$/.test(text) || age < 16 || age > 99) {
-        bot.sendMessage(
-            chatID,
-            '❌ Некорректный возраст.\n\nВведите реальный возраст. Минимальный возраст — 16 лет.'
-        )
-        return
-    }
-    users[chatID].age = age
-    users[chatID].waitingForAge = false
-    users[chatID].waitingForDescription = true
+const result = registrationService.setAge(chatID, text)
+
+if (!result.success) {
     bot.sendMessage(
         chatID,
-        '✅ Возраст сохранён.\n\n📝 Расскажите немного о себе.\n\nОписание необязательно. Максимальная длина — 400 символов.',
-        {
-            reply_markup: {
-                keyboard: [
-                    ['Пропустить']
-                ],
-                resize_keyboard: true,
-                one_time_keyboard: true
-            }
-        }
+        result.message || 'Не удалось сохранить возраст. Попробуйте ещё раз.'
     )
     return
+}
+bot.sendMessage(
+    chatID,
+    '✅ Возраст сохранён.\n\n📝 Расскажите немного о себе.\n\nОписание необязательно. Максимальная длина — 400 символов.',
+    {
+        reply_markup: {
+            keyboard: [
+                ['Пропустить']
+            ],
+            resize_keyboard: true,
+            one_time_keyboard: true
+        }
+    }
+)
+return
+
 }
 
 // ПРОВЕРКА ОПИСАНИЯ
 if (users[chatID]?.waitingForDescription) {
-    if (text === 'Пропустить') {
-        users[chatID].description = ''
-    } else if (text && text.length <= 400) {
-        users[chatID].description = text
-    } else {
-        bot.sendMessage(
-            chatID,
-            '❌ Описание слишком длинное. Максимальная длина — 400 символов.'
-        )
-        return
-    }
-    users[chatID].waitingForDescription = false
-    users[chatID].waitingForCity = true
+const result = registrationService.setDescription(chatID, text)
+
+if (!result.success) {
     bot.sendMessage(
         chatID,
-        '✅ Описание сохранено.\n\n🌍 В каком городе вы живёте?',
-        {
-            reply_markup: {
-                remove_keyboard: true
-            }
-        }
+        result.message || 'Не удалось сохранить описание. Попробуйте ещё раз.'
     )
     return
+}
+bot.sendMessage(
+    chatID,
+    '✅ Описание сохранено.\n\n🌍 В каком городе вы живёте?',
+    {
+        reply_markup: {
+            remove_keyboard: true
+        }
+    }
+)
+return
+
 }
 
 // ПРОВЕРКА ГОРОДА
 if (users[chatID]?.waitingForCity) {
-    if (!/^[A-Za-zА-Яа-яЁё]+(?:[ -][A-Za-zА-Яа-яЁё]+)*$/.test(text)) {
-        bot.sendMessage(
-            chatID,
-            '❌ Некорректное название города.\n\nИспользуйте только русские или латинские буквы.'
-        )
-        return
-    }
-    users[chatID].city = text
-    users[chatID].waitingForCity = false
-    users[chatID].waitingForPhotos = true
-    users[chatID].photos = []
+const result = registrationService.setCity(chatID, text)
+
+if (!result.success) {
     bot.sendMessage(
         chatID,
-        '✅ Город сохранён.\n\n📸 Теперь отправьте от 1 до 5 фотографий для вашей анкеты.',
-        {
-            reply_markup: {
-                remove_keyboard: true
-            }
-        }
+        result.message || 'Не удалось сохранить город. Попробуйте ещё раз.'
     )
     return
 }
+bot.sendMessage(
+    chatID,
+    '✅ Город сохранён.\n\n📸 Теперь отправьте от 1 до 5 фотографий для вашей анкеты.',
+    {
+        reply_markup: {
+            remove_keyboard: true
+        }
+    }
+)
+return
+
+}
 
 // ПРОВЕРКА ФОТО
+// ЗАГРУЗКА ФОТОГРАФИЙ
 if (users[chatID]?.waitingForPhotos) {
+    const user = users[chatID]
+
+    // Завершение загрузки по кнопке «Готово»
     if (text === 'Готово') {
-        if (users[chatID].photos.length === 0) {
-            bot.sendMessage(
-                chatID,
-                '❌ Нужно загрузить хотя бы одну фотографию.'
-            )
+        const result = registrationService.finishPhotos(chatID)
+
+        if (!result.success) {
+            bot.sendMessage(chatID, result.message)
             return
         }
-        users[chatID].waitingForPhotos = false
+
         bot.sendMessage(
             chatID,
             '🎉 Поздравляем! Анкета успешно создана.\n\nЧтобы посмотреть её, используйте команду /profile.',
@@ -452,63 +370,72 @@ if (users[chatID]?.waitingForPhotos) {
         )
         return
     }
-    if (!msg.photo) {
+
+    // Проверяем, что пользователь отправил фотографию
+    if (!msg.photo || msg.photo.length === 0) {
         bot.sendMessage(
             chatID,
-            '❌ Пожалуйста, отправьте фотографию.'
+            '❌ Пожалуйста, отправьте фотографию или нажмите «Готово».'
         )
         return
     }
-    if (users[chatID].photos.length >= 5) {
+
+    // Проверяем лимит до добавления фотографии
+    if (user.photos.length >= 5) {
         bot.sendMessage(
             chatID,
             '❌ Можно добавить максимум 5 фотографий.'
         )
         return
     }
+
+    // Берём фотографию максимального доступного размера
     const photo = msg.photo[msg.photo.length - 1].file_id
-    users[chatID].photos.push(photo)
-if (users[chatID].photos.length === 5) {
-    users[chatID].waitingForPhotos = false
-    bot.sendMessage(
-        chatID,
-        '🎉 Поздравляем! Анкета успешно создана.\n\nЧтобы посмотреть её, используйте команду /profile.',
-        {
-            reply_markup: {
-                remove_keyboard: true
-            }
-        }
-    )
-} else {
+
+    const result = registrationService.addPhoto(chatID, photo)
+
+    if (!result.success) {
+        bot.sendMessage(chatID, result.message)
+        return
+    }
+
+    // Если загружено 5 фотографий, завершаем регистрацию
+    if (result.completed) {
         bot.sendMessage(
             chatID,
-            `✅ Фото добавлено. Сейчас загружено: ${users[chatID].photos.length}/5.\n\nМожете отправить ещё фотографии или нажать «Готово».`,
+            '🎉 Поздравляем! Анкета успешно создана.\n\nЧтобы посмотреть её, используйте команду /profile.',
             {
                 reply_markup: {
-                    keyboard: [
-                        ['Готово']
-                    ],
-                    resize_keyboard: true,
-                    one_time_keyboard: true
+                    remove_keyboard: true
                 }
             }
         )
+        return
     }
+
+    // Если фотографий меньше 5, предлагаем загрузить ещё
+    bot.sendMessage(
+        chatID,
+        `✅ Фото добавлено. Сейчас загружено: ${result.user.photos.length}/5.\n\nМожете отправить ещё фотографии или нажать «Готово».`,
+        {
+            reply_markup: {
+                keyboard: [
+                    ['Готово']
+                ],
+                resize_keyboard: true,
+                one_time_keyboard: true
+            }
+        }
+    )
+
     return
 }
 
 // ПРОСМОТР СВОЕЙ АНКЕТЫ
 if (text === '/profile') {
-    const user = users[chatID]
+    const user = profileService.getProfile(chatID)
 
-    if (
-        !user ||
-        !user.registered ||
-        !user.name ||
-        !user.age ||
-        !user.city ||
-        !user.photos?.length
-    ) {
+    if (!profileService.isProfileComplete(chatID)) {
         bot.sendMessage(
             chatID,
             '❌ Вы ещё не завершили создание анкеты.'
@@ -521,15 +448,18 @@ if (text === '/profile') {
 }
 
 if (text === '/lenta') {
-    const user = users[chatID]
-    if (!user || !user.registered || !user.name || !user.age || !user.city || !user.photos?.length) {
+    const user = profileService.getProfile(chatID)
+
+    if (!profileService.isProfileComplete(chatID)) {
         bot.sendMessage(
             chatID,
             '❌ Сначала необходимо завершить создание анкеты.'
         )
         return
     }
-    const match = findMatch(chatID)
+
+    const match = matchingService.findMatch(chatID)
+
     if (!match) {
         bot.sendMessage(
             chatID,
@@ -537,6 +467,7 @@ if (text === '/lenta') {
         )
         return
     }
+
     sendDatingProfile(chatID, match.chatID)
     return
 }
@@ -603,22 +534,18 @@ if (data.startsWith('match_')) {
         return
     }
 
-    // Проверяем, действительно ли этот пользователь ранее поставил лайк
-    if (!likedUser.likes || !likedUser.likes.includes(chatID)) {
+    const result = likeService.createMatch(chatID, otherChatID)
+
+    if (!result.success) {
         bot.answerCallbackQuery(query.id, {
-            text: 'Этот лайк уже недействителен.'
+            text: result.message
         })
         return
     }
 
-    // Записываем взаимный лайк
-    if (!user.likes) {
-        user.likes = []
-    }
-
-    if (!user.likes.includes(otherChatID)) {
-        user.likes.push(otherChatID)
-    }
+if (!user.hasLiked(otherChatID)) {
+    user.likes.push(otherChatID)
+}
 
     bot.answerCallbackQuery(query.id, {
         text: '❤️ У вас взаимная симпатия!'
@@ -646,7 +573,7 @@ if (data.startsWith('match_')) {
     if (user.photos && user.photos.length > 0) {
         bot.sendPhoto(otherChatID, user.photos[0], {
             caption: `👤 ${user.name}, ${user.age}
-🌍 ${user.city}
+🌍 ${user.city}n
 
 ${user.description || ''}
 
@@ -706,15 +633,9 @@ if (data.startsWith('reject_')) {
             }
         ).catch(() => {})
 
-        if (!user.viewed) {
-            user.viewed = []
-        }
+        user.addViewed(otherChatID)
 
-        if (!user.viewed.includes(otherChatID)) {
-            user.viewed.push(otherChatID)
-        }
-
-        const nextProfile = findMatch(chatID)
+        const nextProfile = matchingService.findMatch(chatID)
 
         if (!nextProfile) {
             bot.sendMessage(
@@ -728,6 +649,7 @@ if (data.startsWith('reject_')) {
         return
     }
 
+    //МЕХАНИКА ЛАЙКА
     if (data.startsWith('like_')) {
         const otherChatID = Number(data.replace('like_', ''))
         const likedUser = users[otherChatID]
@@ -746,31 +668,14 @@ if (data.startsWith('reject_')) {
             return
         }
 
-        if (!user.likes) {
-            user.likes = []
-        }
+        const result = likeService.sendLike(chatID, otherChatID)
 
-        if (!user.likedBy) {
-            user.likedBy = []
-        }
-
-        if (!user.viewed) {
-            user.viewed = []
-        }
-
-        if (!user.likes.includes(otherChatID)) {
-            user.likes.push(otherChatID)
-        }
-
-        if (!user.viewed.includes(otherChatID)) {
-            user.viewed.push(otherChatID)
+        if (!result.success) {
+            bot.sendMessage(chatID, result.message)
+            return
         }
 
         bot.sendMessage(chatID, '❤️ Лайк отправлен! Ждём ответа.')
-
-        if (!likedUser.likedBy.includes(chatID)) {
-            likedUser.likedBy.push(chatID)
-        }
 
         bot.sendMessage(
             otherChatID,
@@ -793,7 +698,7 @@ if (data.startsWith('reject_')) {
             console.error('Не удалось отправить уведомление о лайке:', error.message)
         })
 
-        const nextProfile = findMatch(chatID)
+        const nextProfile = matchingService.findMatch(chatID)
 
         if (!nextProfile) {
             bot.sendMessage(
