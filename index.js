@@ -4,6 +4,11 @@ const TelegramApi = require('node-telegram-bot-api')
 const token = process.env.BOT_TOKEN
 const { db, initDatabase } = require('./database')
 const bot = new TelegramApi(token, { polling: false })
+bot.setMyCommands([
+    { command: 'start', description: 'Запустить бота, начать все заново' },
+    { command: 'profile', description: 'Посмотреть свою анкету' },
+    { command: 'lenta', description: 'Смотреть анкеты пользователей' },
+])
 
 const inviteCode = 'YABLOKO'
 const users = {}
@@ -170,26 +175,40 @@ ${user.description || ''}`
     }
 }
 
-// ПОКАЗ СОБСТВЕННОЙ АНКЕТЫ
-function sendProfile(chatID, user) {
+//ПОКАЗ СОБСТВЕННОЙ АНКЕТЫ
+async function sendProfile(chatID, user) {
     const profileText = `👤 ${user.name}, ${user.age}
 🌍 ${user.city}
 
 ${user.description || ''}`
 
-    bot.sendPhoto(
-        chatID,
-        user.photos[0],
-        {
-            caption: profileText
+    try {
+        if (!user.photos || user.photos.length === 0) {
+            await bot.sendMessage(chatID, '❌ В анкете нет фотографий.')
+            return
         }
-    ).catch(error => {
+
+        if (user.photos.length === 1) {
+            await bot.sendPhoto(chatID, user.photos[0], {
+                caption: profileText
+            })
+            return
+        }
+
+        const media = user.photos.map((photo, index) => ({
+            type: 'photo',
+            media: photo,
+            ...(index === 0 ? { caption: profileText } : {})
+        }))
+
+        await bot.sendMediaGroup(chatID, media)
+    } catch (error) {
         console.error('Ошибка показа собственной анкеты:', error.message)
-        bot.sendMessage(
+        await bot.sendMessage(
             chatID,
             '❌ Не удалось показать анкету. Попробуйте позже.'
         )
-    })
+    }
 }
 
 
@@ -226,6 +245,11 @@ ${user.description || ''}
 bot.on('message', msg => {
     const chatID = msg.chat.id
     const text = msg.text
+    if (users[chatID]?.waitingForAge &&
+    (text === '👨 Мужской' || text === '👩 Женский')) {
+    bot.sendMessage(chatID, '❌ Сейчас нужно ввести возраст числом.')
+    return
+    }
     if (!users[chatID]) {
         users[chatID] = {
             registered: false
@@ -315,7 +339,12 @@ if (users[chatID]?.waitingForGender) {
     users[chatID].waitingForAge = true
     bot.sendMessage(
         chatID,
-        '✅ Пол сохранён.\n\n🎂 Сколько вам лет?\n\nВведите возраст двумя цифрами. Минимальный возраст для регистрации — 16 лет.\n\n⚠️ Пожалуйста, указывайте реальный возраст. Подделка возраста недопустима.'
+        '✅ Пол сохранён.\n\n🎂 Сколько вам лет?\n\nМинимальный возраст для регистрации — 16 лет.\n\n⚠️ Пожалуйста, указывайте реальный возраст. Подделка возраста недопустима.',
+        {
+            reply_markup: {
+                remove_keyboard: true
+            }
+        }
     )
     return
 }
@@ -326,7 +355,7 @@ if (users[chatID]?.waitingForAge) {
     if (!/^\d{2}$/.test(text) || age < 16 || age > 99) {
         bot.sendMessage(
             chatID,
-            '❌ Некорректный возраст.\n\nВведите реальный возраст двумя цифрами. Минимальный возраст — 16 лет.'
+            '❌ Некорректный возраст.\n\nВведите реальный возраст. Минимальный возраст — 16 лет.'
         )
         return
     }
@@ -366,7 +395,12 @@ if (users[chatID]?.waitingForDescription) {
     users[chatID].waitingForCity = true
     bot.sendMessage(
         chatID,
-        '✅ Описание сохранено.\n\n🌍 В каком городе вы живёте?'
+        '✅ Описание сохранено.\n\n🌍 В каком городе вы живёте?',
+        {
+            reply_markup: {
+                remove_keyboard: true
+            }
+        }
     )
     return
 }
@@ -386,7 +420,12 @@ if (users[chatID]?.waitingForCity) {
     users[chatID].photos = []
     bot.sendMessage(
         chatID,
-        '✅ Город сохранён.\n\n📸 Теперь отправьте от 1 до 5 фотографий для вашей анкеты.'
+        '✅ Город сохранён.\n\n📸 Теперь отправьте от 1 до 5 фотографий для вашей анкеты.',
+        {
+            reply_markup: {
+                remove_keyboard: true
+            }
+        }
     )
     return
 }
@@ -508,6 +547,49 @@ bot.on('callback_query', query => {
     const chatID = query.message.chat.id
     const data = query.data
     const user = users[chatID]
+    // ПРОСМОТР АНКЕТЫ ЧЕЛОВЕКА, КОТОРЫЙ ПОСТАВИЛ ЛАЙК
+    if (data.startsWith('viewlike_')) {
+        const otherChatID = Number(data.replace('viewlike_', ''))
+        const likedUser = users[otherChatID]
+
+        if (!likedUser) {
+            bot.answerCallbackQuery(query.id, {
+                text: 'Анкета больше недоступна.'
+            })
+            return
+        }
+
+        bot.answerCallbackQuery(query.id)
+
+        bot.editMessageReplyMarkup(
+            { inline_keyboard: [] },
+            {
+                chat_id: chatID,
+                message_id: query.message.message_id
+            }
+        ).catch(() => {})
+
+        sendLikeBackProfile(chatID, otherChatID)
+        return
+    }
+
+    // ОТКЛОНЕНИЕ ВХОДЯЩЕГО ЛАЙКА
+    if (data.startsWith('rejectlike_')) {
+        bot.answerCallbackQuery(query.id, {
+            text: 'Лайк отклонён.'
+        })
+
+        bot.editMessageReplyMarkup(
+            { inline_keyboard: [] },
+            {
+                chat_id: chatID,
+                message_id: query.message.message_id
+            }
+        ).catch(() => {})
+
+        bot.sendMessage(chatID, 'Вы отклонили лайк.')
+        return
+    }
 
     // ОТВЕТ НА ВХОДЯЩИЙ ЛАЙК
 if (data.startsWith('match_')) {
@@ -560,19 +642,29 @@ if (data.startsWith('match_')) {
         ? `@${likedUser.username}`
         : 'Username не указан'
 
-    // Уведомляем обоих участников
+    // Уведомляем пользователя А и отправляем ему анкету Б
+    if (user.photos && user.photos.length > 0) {
+        bot.sendPhoto(otherChatID, user.photos[0], {
+            caption: `👤 ${user.name}, ${user.age}
+🌍 ${user.city}
+
+${user.description || ''}
+
+❤️ Этот пользователь ответил вам взаимностью!
+Telegram: ${currentUsername}`
+        }).catch(error => {
+            console.error('Ошибка отправки анкеты после мэтча:', error.message)
+        })
+    }
+
+    // Уведомляем пользователя Б — без повторной отправки анкеты А
     bot.sendMessage(
         chatID,
         `🎉 Это мэтч!\n\n❤️ Вы понравились друг другу!\n\nTelegram пользователя: ${otherUsername}`
     )
 
-    bot.sendMessage(
-        otherChatID,
-        `🎉 Это мэтч!\n\n❤️ Вы понравились друг другу!\n\nTelegram пользователя: ${currentUsername}`
-    )
-
     return
-}
+    }
 
 // ОТКЛОНЕНИЕ ВХОДЯЩЕГО ЛАЙКА
 if (data.startsWith('reject_')) {
@@ -676,20 +768,28 @@ if (data.startsWith('reject_')) {
 
         bot.sendMessage(chatID, '❤️ Лайк отправлен! Ждём ответа.')
 
-        bot.sendMessage(
-            chatID,
-            '❤️ Лайк отправлен! Ждём ответа.'
-        )
-
         if (!likedUser.likedBy.includes(chatID)) {
             likedUser.likedBy.push(chatID)
         }
 
         bot.sendMessage(
             otherChatID,
-            `❤️ Ваша анкета понравилась пользователю ${user.name}!\n\nПосмотрите его анкету и решите, хотите ли вы ответить взаимностью.`).then(() => {
-            sendLikeBackProfile(otherChatID, chatID)
-        }).catch(error => {
+            '❤️ Вы понравились одному человеку!\n\nХотите посмотреть его анкету?',
+            {
+                reply_markup: {
+                    inline_keyboard: [[
+                        {
+                            text: '✅ Да',
+                            callback_data: `viewlike_${chatID}`
+                        },
+                        {
+                            text: '❌ Нет',
+                            callback_data: `rejectlike_${chatID}`
+                        }
+                    ]]
+                }
+            }
+        ).catch(error => {
             console.error('Не удалось отправить уведомление о лайке:', error.message)
         })
 
