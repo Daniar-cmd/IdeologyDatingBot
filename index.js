@@ -111,12 +111,6 @@ function findMatch(chatID) {
         if (user.gender === otherUser.gender) {
             continue
         }
-        if (user.city.toLowerCase() !== otherUser.city.toLowerCase()) {
-            continue
-        }
-        if (Math.abs(user.age - otherUser.age) > 10) {
-            continue
-        }
         matches.push({
             chatID: Number(otherChatID),
             user: otherUser
