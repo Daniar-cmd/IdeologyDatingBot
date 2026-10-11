@@ -19,10 +19,15 @@ class UserRepository {
                 age: row.age ?? null,
                 description: row.description || '',
                 city: row.city || null,
+                isGlobal: Boolean(row.is_global),
+                hidden: Boolean(row.hidden),
+                banned: Boolean(row.banned),
+                warnings: Number(row.warnings) || 0,
                 photos: row.photos || [],
                 likes: row.likes || [],
                 likedBy: row.liked_by || [],
-                viewed: row.viewed || []
+                viewed: row.viewed || [],
+                matches: row.matches || []
             })
 
             if (row.state) {
@@ -50,15 +55,20 @@ class UserRepository {
                 age,
                 description,
                 city,
+                is_global,
+                hidden,
+                banned,
+                warnings,
                 photos,
                 likes,
                 liked_by,
                 viewed,
+                matches,
                 state
             )
             VALUES (
                 $1, $2, $3, $4, $5, $6, $7,
-                $8, $9, $10, $11, $12, $13
+                $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
             )
             ON CONFLICT (chat_id) DO UPDATE SET
                 username = EXCLUDED.username,
@@ -68,10 +78,15 @@ class UserRepository {
                 age = EXCLUDED.age,
                 description = EXCLUDED.description,
                 city = EXCLUDED.city,
+                is_global = EXCLUDED.is_global,
+                hidden = EXCLUDED.hidden,
+                banned = EXCLUDED.banned,
+                warnings = EXCLUDED.warnings,
                 photos = EXCLUDED.photos,
                 likes = EXCLUDED.likes,
                 liked_by = EXCLUDED.liked_by,
                 viewed = EXCLUDED.viewed,
+                matches = EXCLUDED.matches,
                 state = EXCLUDED.state
         `, [
             String(user.chatID),
@@ -82,10 +97,15 @@ class UserRepository {
             user.age ?? null,
             user.description || '',
             user.city || null,
+            user.isGlobal ? true : false,
+            user.hidden ? true : false,
+            user.banned ? true : false,
+            user.warnings || 0,
             JSON.stringify(user.photos || []),
             JSON.stringify(user.likes || []),
             JSON.stringify(user.likedBy || []),
             JSON.stringify(user.viewed || []),
+            JSON.stringify(user.matches || []),
             state
         ])
     }

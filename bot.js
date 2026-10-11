@@ -3,13 +3,32 @@ const { db, initDatabase } = require('./database')
 
 const User = require('./models/user')
 const UserRepository = require('./repositories/UserRepository')
+const ReportRepository = require('./repositories/ReportRepository')
+const ModeratorRepository = require('./repositories/ModeratorRepository')
 
 const RegistrationService = require('./services/RegistrationService')
 const LikeService = require('./services/LikeService')
 const MatchingService = require('./services/MatchingService')
 const ProfileService = require('./services/ProfileService')
+const ReportService = require('./services/ReportService')
+const ModeratorService = require('./services/ModeratorService')
+const CityService = require('./services/CityService')
+const ContentFilter = require('./services/ContentFilter')
 
 const MessageHandler = require('./handlers/MessageHandler')
+
+// Список чатов-модераторов: MODERATORSID=[1001, 1002] или '1001,1002'
+function parseModeratorIDs(envValue) {
+    if (!envValue) {
+        return []
+    }
+
+    return String(envValue)
+        .replace(/[\[\]"']/g, '')
+        .split(',')
+        .map(part => Number(part.trim()))
+        .filter(id => Number.isInteger(id) && id > 0)
+}
 
 class Bot {
     constructor() {
@@ -24,16 +43,27 @@ class Bot {
         this.users = {}
 
         this.userRepository = new UserRepository(db, User)
+        this.reportRepository = new ReportRepository(db)
+        this.moderatorRepository = new ModeratorRepository(db)
 
         this.likeService = new LikeService(this.users)
-        this.matchingService = new MatchingService(this.users)
+        this.cityService = new CityService()
+        this.contentFilter = new ContentFilter()
+        this.matchingService = new MatchingService(this.users, this.cityService)
         this.profileService = new ProfileService(this.users)
 
         this.registrationService = new RegistrationService(
             this.users,
             User,
-            process.env.INVITE_CODE || 'YABLOKO'
+            process.env.INVITE_CODE || 'YABLOKO',
+            this.cityService,
+            this.contentFilter
         )
+
+        this.reportService = new ReportService(this.reportRepository)
+        this.moderatorService = new ModeratorService(this.moderatorRepository)
+
+        this.moderatorChatIDs = parseModeratorIDs(process.env.MODERATORSID || process.env.REPORT_CHAT_IDS)
 
         this.messageHandler = new MessageHandler(
             this.bot,
@@ -41,7 +71,11 @@ class Bot {
             this.registrationService,
             this.profileService,
             this.matchingService,
-            this.likeService
+            this.likeService,
+            this.cityService,
+            this.reportService,
+            this.moderatorChatIDs,
+            this.moderatorService
         )
 
         this.saveInterval = null
@@ -51,6 +85,14 @@ class Bot {
         const loadedUsers = await this.userRepository.findAll()
 
         for (const user of loadedUsers) {
+            // Новая очередь регистрации: возраст → город → описание → фото.
+            // Если пользователь «завис» на старом шаге описания без города
+            // (раньше город шёл после описания), отправляем его на шаг города.
+            if (user.waitingForDescription && !user.city && !user.isGlobal) {
+                user.waitingForDescription = false
+                user.waitingForCity = true
+            }
+
             this.users[user.chatID] = user
         }
 
@@ -76,12 +118,16 @@ class Bot {
                 description: 'Запустить бота, начать все заново'
             },
             {
-                command: 'profile',
+                command: 'myprofile',
                 description: 'Посмотреть свою анкету'
             },
             {
                 command: 'lenta',
                 description: 'Смотреть анкеты пользователей'
+            },
+            {
+                command: 'report',
+                description: 'Пожаловаться на анкету'
             }
         ])
     }
@@ -90,6 +136,12 @@ class Bot {
         try {
 
             await initDatabase()
+
+            if (this.moderatorChatIDs.length === 0) {
+                console.warn('⚠️  MODERATORSID не задан — уведомления о жалобах модераторам отправляться не будут.')
+            } else {
+                console.log(`Модерация жалоб: уведомления включены (получателей: ${this.moderatorChatIDs.length})`)
+            }
 
             await this.loadUsers()
 
@@ -112,3 +164,4 @@ class Bot {
 }
 
 module.exports = Bot
+module.exports.parseModeratorIDs = parseModeratorIDs

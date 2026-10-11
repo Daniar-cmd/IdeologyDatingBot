@@ -4,3 +4,5 @@ node_modules/
 dating.db
 dating.db-shm
 dating.db-wal
+AGENTS.md 
+.opencode/

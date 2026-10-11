@@ -26,11 +26,54 @@ async function initDatabase() {
                 age INTEGER,
                 description TEXT DEFAULT '',
                 city TEXT,
+                is_global BOOLEAN DEFAULT FALSE,
+                hidden BOOLEAN DEFAULT FALSE,
+                banned BOOLEAN DEFAULT FALSE,
+                warnings INTEGER DEFAULT 0,
                 photos JSONB DEFAULT '[]'::jsonb,
                 likes JSONB DEFAULT '[]'::jsonb,
                 liked_by JSONB DEFAULT '[]'::jsonb,
                 viewed JSONB DEFAULT '[]'::jsonb,
+                matches JSONB DEFAULT '[]'::jsonb,
                 state TEXT
+            )
+        `)
+
+        // Добавляем колонки для уже существующих таблиц (без разрушения данных)
+        await db.query(`
+            ALTER TABLE users
+            ADD COLUMN IF NOT EXISTS matches JSONB DEFAULT '[]'::jsonb,
+            ADD COLUMN IF NOT EXISTS is_global BOOLEAN DEFAULT FALSE,
+            ADD COLUMN IF NOT EXISTS hidden BOOLEAN DEFAULT FALSE,
+            ADD COLUMN IF NOT EXISTS banned BOOLEAN DEFAULT FALSE,
+            ADD COLUMN IF NOT EXISTS warnings INTEGER DEFAULT 0
+        `)
+
+        // Жалобы пользователей на анкеты
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS reports (
+                id SERIAL PRIMARY KEY,
+                reporter_chat_id TEXT NOT NULL,
+                reported_chat_id TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                status TEXT DEFAULT 'new',
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                processed_at TIMESTAMPTZ
+            )
+        `)
+
+        // Добавляем колонки для уже существующих таблиц (без разрушения данных)
+        await db.query(`
+            ALTER TABLE reports
+            ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'new',
+            ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ
+        `)
+
+        // Заморозка модераторов за неверные admin-ключи
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS moderator_freezes (
+                chat_id TEXT PRIMARY KEY,
+                frozen_until TIMESTAMPTZ NOT NULL
             )
         `)
 

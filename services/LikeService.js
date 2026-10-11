@@ -24,12 +24,15 @@ class LikeService {
             }
         }
 
+        const alreadyLiked = fromUser.hasLiked(toID)
+
         fromUser.addLike(toID)
         fromUser.addViewed(toID)
         toUser.addIncomingLike(fromID)
 
         return {
             success: true,
+            alreadyLiked,
             isMatch: toUser.hasLiked(fromID)
         }
     }
@@ -81,10 +84,17 @@ class LikeService {
             }
         }
 
-        fromUser.addLike(toID)
+        const alreadyMatched = fromUser.hasMatch(toID)
+
+        if (!alreadyMatched) {
+            fromUser.addLike(toID)
+            fromUser.addMatch(toID)
+            toUser.addMatch(fromID)
+        }
 
         return {
             success: true,
+            alreadyMatched,
             user: fromUser,
             matchedUser: toUser
         }
