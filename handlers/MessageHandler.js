@@ -1,5 +1,8 @@
+const ReportService = require('../services/ReportService')
+const ImageModerationService = require('../services/ImageModerationService')
+
 class MessageHandler {
-    constructor(bot, users, registrationService, profileService, matchingService, likeService, cityService, reportService, moderatorChatIDs = [], moderatorService = null) {
+    constructor(bot, users, registrationService, profileService, matchingService, likeService, cityService, reportService, moderatorChatIDs = [], moderatorService = null, imageModerationService = null) {
         this.bot = bot;
         this.users = users;
         this.registrationService = registrationService;
@@ -10,6 +13,7 @@ class MessageHandler {
         this.reportService = reportService;
         this.moderatorChatIDs = moderatorChatIDs;
         this.moderatorService = moderatorService;
+        this.imageModerationService = imageModerationService || new ImageModerationService(bot);
 
         // Состояние разбора жалобы в чате модератора:
         // { step, reportID, action, reason, attempts, deadline, timer }
@@ -402,6 +406,14 @@ ${user.description || ''}`;
         return { reply_markup: { remove_keyboard: true } };
     }
 
+    imageModerationRejectMessage(reason) {
+        if (reason === 'qr') {
+            return '❌ Фото содержит QR-код. Пожалуйста, загрузите фото без QR-кода.';
+        }
+
+        return '❌ Фото содержит неприемлемый контент. Пожалуйста, загрузите другое фото.';
+    }
+
     async startDating(chatID) {
         if (!this.profileService.isProfileComplete(chatID)) {
             await this.bot.sendMessage(chatID, '❌ Сначала необходимо завершить создание анкеты.');
@@ -734,6 +746,14 @@ ${user.description || ''}
                     }
 
                     const photo = msg.photo[msg.photo.length - 1].file_id;
+
+                    const moderation = await this.imageModerationService.moderateFile(photo);
+
+                    if (!moderation.ok) {
+                        await this.bot.sendMessage(chatID, this.imageModerationRejectMessage(moderation.reason));
+                        return;
+                    }
+
                     const result = this.registrationService.addEditPhoto(chatID, photo);
 
                     if (!result.success) {
@@ -957,6 +977,14 @@ ${user.description || ''}
                     }
 
                     const photo = msg.photo[msg.photo.length - 1].file_id;
+
+                    const moderation = await this.imageModerationService.moderateFile(photo);
+
+                    if (!moderation.ok) {
+                        await this.bot.sendMessage(chatID, this.imageModerationRejectMessage(moderation.reason));
+                        return;
+                    }
+
                     const result = this.registrationService.addPhoto(chatID, photo);
 
                     if (!result.success) {
