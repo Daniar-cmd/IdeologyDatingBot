@@ -4,7 +4,9 @@
   "main": "index.js",
   "scripts": {
     "dev": "nodemon index.js",
-    "start": "node index.js"
+    "start": "node index.js",
+    "console": "node console.js",
+    "moderation": "node moderation.js"
   },
   "keywords": [],
   "author": "",

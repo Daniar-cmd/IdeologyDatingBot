@@ -16,7 +16,8 @@ class User {
         matches = [],
         hidden = false,
         banned = false,
-        warnings = 0
+        warnings = 0,
+        createdAt = null
     }) {
         this.chatID = chatID
         this.username = username
@@ -30,6 +31,7 @@ class User {
         this.hidden = Boolean(hidden)
         this.banned = Boolean(banned)
         this.warnings = Number(warnings) || 0
+        this.createdAt = createdAt ? new Date(createdAt) : null
 
         this.photos = Array.isArray(photos) ? photos : []
         this.likes = Array.isArray(likes) ? likes : []

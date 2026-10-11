@@ -4,10 +4,31 @@ class UserRepository {
         this.User = User
     }
 
-    async findAll() {
-        const result = await this.db.query(
-            'SELECT * FROM users'
-        )
+    async findAll({ orderByCreatedAtDesc = false, limit, offset } = {}) {
+        const params = []
+        let query = 'SELECT * FROM users'
+        const conditions = []
+
+        if (orderByCreatedAtDesc) {
+            conditions.push('1=1')
+        }
+
+        const baseOrder = orderByCreatedAtDesc ? 'ORDER BY created_at DESC NULLS LAST, chat_id DESC' : 'ORDER BY chat_id ASC'
+
+        if (typeof limit === 'number') {
+            params.push(limit)
+            const limitClause = `LIMIT $${params.length}`
+            if (typeof offset === 'number') {
+                params.push(offset)
+                query = `${query} ${baseOrder} ${limitClause} OFFSET $${params.length}`
+            } else {
+                query = `${query} ${baseOrder} ${limitClause}`
+            }
+        } else {
+            query = `${query} ${baseOrder}`
+        }
+
+        const result = await this.db.query(query, params)
 
         return result.rows.map(row => {
             const user = new this.User({
@@ -33,6 +54,8 @@ class UserRepository {
             if (row.state) {
                 user[row.state] = true
             }
+
+            user.createdAt = row.created_at ? new Date(row.created_at) : null
 
             return user
         })

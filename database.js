@@ -35,7 +35,8 @@ async function initDatabase() {
                 liked_by JSONB DEFAULT '[]'::jsonb,
                 viewed JSONB DEFAULT '[]'::jsonb,
                 matches JSONB DEFAULT '[]'::jsonb,
-                state TEXT
+                state TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW()
             )
         `)
 
@@ -46,7 +47,8 @@ async function initDatabase() {
             ADD COLUMN IF NOT EXISTS is_global BOOLEAN DEFAULT FALSE,
             ADD COLUMN IF NOT EXISTS hidden BOOLEAN DEFAULT FALSE,
             ADD COLUMN IF NOT EXISTS banned BOOLEAN DEFAULT FALSE,
-            ADD COLUMN IF NOT EXISTS warnings INTEGER DEFAULT 0
+            ADD COLUMN IF NOT EXISTS warnings INTEGER DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()
         `)
 
         // Жалобы пользователей на анкеты
@@ -74,6 +76,22 @@ async function initDatabase() {
             CREATE TABLE IF NOT EXISTS moderator_freezes (
                 chat_id TEXT PRIMARY KEY,
                 frozen_until TIMESTAMPTZ NOT NULL
+            )
+        `)
+
+        // Логи действий модерации (консоль + Telegram)
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS moderation_actions (
+                id SERIAL PRIMARY KEY,
+                action TEXT NOT NULL,
+                moderator_name TEXT,
+                moderator_telegram_id TEXT,
+                target_chat_id TEXT NOT NULL,
+                target_username TEXT,
+                duration_ms BIGINT,
+                reason TEXT,
+                note TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW()
             )
         `)
 
