@@ -140,6 +140,22 @@ async function initDatabase() {
             )
         `)
 
+        // Сообщения, прикреплённые к лайку (разовые, переписка внутри бота не ведётся)
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS messages (
+                id SERIAL PRIMARY KEY,
+                from_chat_id TEXT NOT NULL,
+                to_chat_id TEXT NOT NULL,
+                text TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        `)
+
+        await db.query(`
+            CREATE INDEX IF NOT EXISTS messages_from_to_idx
+            ON messages (from_chat_id, to_chat_id, created_at)
+        `)
+
     } catch (error) {
         console.error('Ошибка инициализации PostgreSQL:')
         console.error(error.message)

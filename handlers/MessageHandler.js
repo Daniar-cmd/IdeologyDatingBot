@@ -2,7 +2,7 @@ const ReportService = require('../services/ReportService')
 const ImageModerationService = require('../services/ImageModerationService')
 
 class MessageHandler {
-    constructor(bot, users, registrationService, profileService, matchingService, likeService, cityService, reportService, moderatorChatIDs = [], moderatorService = null, imageModerationService = null, userRepository = null) {
+    constructor(bot, users, registrationService, profileService, matchingService, likeService, cityService, reportService, moderatorChatIDs = [], moderatorService = null, imageModerationService = null, userRepository = null, messageService = null) {
         this.bot = bot;
         this.users = users;
         this.registrationService = registrationService;
@@ -15,6 +15,7 @@ class MessageHandler {
         this.moderatorService = moderatorService;
         this.imageModerationService = imageModerationService || new ImageModerationService(bot);
         this.userRepository = userRepository;
+        this.messageService = messageService;
 
         // Состояние разбора жалобы в чате модератора:
         // { step, reportID, action, reason, attempts, deadline, timer }
@@ -632,6 +633,14 @@ ${user.description || ''}`;
         await this.sendDatingProfile(chatID, match.chatID);
     }
 
+    // Клавиатура действий с анкетой: лайк / сообщение / пропуск.
+    datingKeyboard() {
+        return {
+            keyboard: [['❤️', '💌', '❌']],
+            resize_keyboard: true
+        };
+    }
+
     async sendDatingProfile(chatID, otherChatID) {
         const user = this.users[otherChatID];
 
@@ -645,21 +654,18 @@ ${user.description || ''}`;
             return;
         }
 
+        const incoming = await this.formatIncomingMessages(chatID, otherChatID);
+
         const profileText = `👤 ${user.name}, ${user.age}
 ${this.formatLocation(user)}
 
-${user.description || ''}`;
+${user.description || ''}${incoming}`;
 
         try {
             if (user.photos.length === 1) {
                 await this.bot.sendPhoto(chatID, user.photos[0], {
                     caption: profileText,
-                    reply_markup: {
-                        inline_keyboard: [[
-                            { text: '❤️', callback_data: `like_${otherChatID}` },
-                            { text: '❌', callback_data: `skip_${otherChatID}` }
-                        ]]
-                    }
+                    reply_markup: this.datingKeyboard()
                 });
                 return;
             }
@@ -670,18 +676,13 @@ ${user.description || ''}`;
                 ...(index === 0 ? { caption: profileText } : {})
             }));
 
-            const sentMessages = await this.bot.sendMediaGroup(chatID, media);
-            const lastMessage = sentMessages[sentMessages.length - 1];
+            await this.bot.sendMediaGroup(chatID, media);
 
-            await this.bot.sendMessage(chatID, 'Выберите действие:', {
-                reply_markup: {
-                    inline_keyboard: [[
-                        { text: '❤️', callback_data: `like_${otherChatID}` },
-                        { text: '❌', callback_data: `skip_${otherChatID}` }
-                    ]]
-                },
-                reply_to_message_id: lastMessage.message_id
-            });
+            await this.bot.sendMessage(
+                chatID,
+                '❤️ — лайк, 💌 — лайк с сообщением, ❌ — пропустить.',
+                { reply_markup: this.datingKeyboard() }
+            );
         } catch (error) {
             console.error('Ошибка отправки анкеты:', error.message);
             await this.bot.sendMessage(chatID, '❌ Не удалось отправить анкету. Попробуйте позже.');
@@ -740,24 +741,239 @@ ${user.description || ''}`;
             return;
         }
 
+        const incoming = await this.formatIncomingMessages(chatID, otherChatID);
+
         const profileText = `❤️ Этот человек поставил вам лайк!
 
 👤 ${user.name}, ${user.age}
 ${this.formatLocation(user)}
 
-${user.description || ''}
+${user.description || ''}${incoming}
 
 Симпатия взаимна?`;
 
-        await this.bot.sendPhoto(chatID, user.photos[0], {
-            caption: profileText,
-            reply_markup: {
-                inline_keyboard: [[
-                    { text: '❤️ Лайкнуть в ответ', callback_data: `match_${otherChatID}` },
-                    { text: '❌', callback_data: `reject_${otherChatID}` }
-                ]]
+        try {
+            if (user.photos.length === 1) {
+                await this.bot.sendPhoto(chatID, user.photos[0], {
+                    caption: profileText,
+                    reply_markup: this.datingKeyboard()
+                });
+                return;
             }
+
+            const media = user.photos.map((photo, index) => ({
+                type: 'photo',
+                media: photo,
+                ...(index === 0 ? { caption: profileText } : {})
+            }));
+
+            await this.bot.sendMediaGroup(chatID, media);
+
+            await this.bot.sendMessage(
+                chatID,
+                '❤️ — взаимно, 💌 — взаимно с сообщением, ❌ — пропустить.',
+                { reply_markup: this.datingKeyboard() }
+            );
+        } catch (error) {
+            console.error('Ошибка показа анкеты лайкнувшего:', error.message);
+            await this.bot.sendMessage(chatID, '❌ Не удалось показать анкету. Попробуйте позже.');
+        }
+    }
+
+    // Сообщения от владельца анкеты к тому, кто её смотрит.
+    async formatIncomingMessages(viewerChatID, otherChatID) {
+        if (!this.messageService) {
+            return '';
+        }
+
+        let messages = [];
+
+        try {
+            // Показываем только последнее сообщение: подпись к фото в Telegram ≤ 1024 символов.
+            messages = await this.messageService.getMessagesFrom(otherChatID, viewerChatID, 1);
+        } catch (error) {
+            console.error('Ошибка загрузки сообщений:', error.message);
+            return '';
+        }
+
+        if (!messages || messages.length === 0) {
+            return '';
+        }
+
+        const owner = this.users[otherChatID];
+        const ownerName = owner?.name || 'пользователь';
+        const body = messages.map(item => item.text).join('\n\n');
+
+        return `\n\n💌 Сообщение от ${ownerName}:\n${body}`;
+    }
+
+    async showNextProfile(chatID) {
+        const nextProfile = this.matchingService.findMatch(chatID);
+
+        if (!nextProfile) {
+            await this.bot.sendMessage(chatID, '😔 Пока больше нет подходящих анкет.', {
+                reply_markup: { remove_keyboard: true }
+            });
+            return;
+        }
+
+        await this.sendDatingProfile(chatID, nextProfile.chatID);
+    }
+
+    async notifyUserLike(fromChatID, toChatID) {
+        await this.bot.sendMessage(
+            toChatID,
+            '❤️ Вы понравились одному человеку!\n\nХотите посмотреть его анкету?',
+            {
+                reply_markup: {
+                    inline_keyboard: [[
+                        { text: '✅ Да', callback_data: `viewlike_${fromChatID}` },
+                        { text: '❌ Нет', callback_data: `rejectlike_${fromChatID}` }
+                    ]]
+                }
+            }
+        ).catch(error => {
+            console.error('Не удалось отправить уведомление о лайке:', error.message);
         });
+    }
+
+    async celebrateMatch(chatID, otherChatID) {
+        const user = this.users[chatID];
+        const likedUser = this.users[otherChatID];
+
+        if (!user || !likedUser) {
+            return;
+        }
+
+        const result = this.likeService.createMatch(chatID, otherChatID);
+
+        if (!result.success) {
+            await this.bot.sendMessage(chatID, result.message || 'Не удалось создать мэтч.');
+            return;
+        }
+
+        if (result.alreadyMatched) {
+            await this.bot.sendMessage(chatID, '❤️ Мэтч уже создан.');
+            return;
+        }
+
+        const currentUsername = user.username ? `@${user.username}` : 'Username не указан';
+        const otherUsername = likedUser.username ? `@${likedUser.username}` : 'Username не указан';
+
+        if (user.photos && user.photos.length > 0) {
+            await this.bot.sendPhoto(otherChatID, user.photos[0], {
+                caption: `👤 ${user.name}, ${user.age}
+${this.formatLocation(user)}
+
+${user.description || ''}
+
+❤️ Этот пользователь ответил вам взаимностью!
+Telegram: ${currentUsername}`
+            }).catch(error => {
+                console.error('Ошибка отправки анкеты после мэтча:', error.message);
+            });
+        }
+
+        await this.bot.sendMessage(
+            chatID,
+            `🎉 Это мэтч!\n\n❤️ Вы понравились друг другу!\n\nTelegram пользователя: ${otherUsername}`
+        );
+    }
+
+    // Обработка нажатий клавиатуры анкеты: ❤️ / 💌 / ❌.
+    async handleDatingKeyboard(chatID, action) {
+        const user = this.users[chatID];
+        const target = user?.lastShownProfileID;
+        const targetUser = target ? this.users[target] : null;
+
+        if (!user || !targetUser ||
+            (this.profileService && !this.profileService.isProfileComplete(chatID))) {
+            await this.bot.sendMessage(chatID, '❌ Анкета больше недоступна. Откройте ленту заново — /lenta.');
+            return;
+        }
+
+        if (action === '❌') {
+            user.addViewed(target);
+            await this.showNextProfile(chatID);
+            return;
+        }
+
+        if (action === '💌') {
+            const messageLike = this.likeService.sendLike(chatID, target);
+
+            if (!messageLike.success) {
+                await this.bot.sendMessage(chatID, messageLike.message || 'Не удалось поставить лайк.');
+                return;
+            }
+
+            if (messageLike.isMatch) {
+                await this.celebrateMatch(chatID, target);
+            } else if (!messageLike.alreadyLiked) {
+                await this.bot.sendMessage(chatID, '❤️ Лайк отправлен! Ждём ответа.');
+                await this.notifyUserLike(chatID, target);
+            }
+
+            user.pendingMessageTo = target;
+
+            await this.bot.sendMessage(
+                chatID,
+                `💌 Напишите сообщение для ${targetUser.name}.\n\nОно уйдёт вместе с лайком. Чтобы отменить — нажмите ❌.`
+            );
+            return;
+        }
+
+        const result = this.likeService.sendLike(chatID, target);
+
+        if (!result.success) {
+            await this.bot.sendMessage(chatID, result.message || 'Не удалось поставить лайк.');
+            return;
+        }
+
+        if (result.isMatch) {
+            await this.celebrateMatch(chatID, target);
+            return;
+        }
+
+        if (!result.alreadyLiked) {
+            await this.bot.sendMessage(chatID, '❤️ Лайк отправлен! Ждём ответа.');
+            await this.notifyUserLike(chatID, target);
+        }
+
+        await this.showNextProfile(chatID);
+    }
+
+    // Отправка текста, который пользователь набрал после нажатия 💌.
+    async handlePendingMessage(chatID, text) {
+        const user = this.users[chatID];
+        const target = user.pendingMessageTo;
+        const targetUser = this.users[target];
+
+        if (!targetUser) {
+            user.pendingMessageTo = null;
+            await this.bot.sendMessage(chatID, '❌ Анкета больше недоступна.');
+            return;
+        }
+
+        if (!this.messageService) {
+            user.pendingMessageTo = null;
+            await this.bot.sendMessage(chatID, '❌ Отправка сообщений временно недоступна.');
+            return;
+        }
+
+        const result = await this.messageService.send(chatID, target, text).catch(error => {
+            console.error('Ошибка отправки сообщения:', error.message);
+            return { success: false, message: '❌ Не удалось отправить сообщение.' };
+        });
+
+        // При ошибке ожидание сохраняется — можно повторить ввод.
+        if (!result.success) {
+            await this.bot.sendMessage(chatID, result.message || '❌ Не удалось отправить сообщение.');
+            return;
+        }
+
+        user.pendingMessageTo = null;
+        await this.bot.sendMessage(chatID, `💌 Сообщение отправлено ${targetUser.name}.`);
+        await this.showNextProfile(chatID);
     }
 
     register() {
@@ -793,6 +1009,19 @@ ${user.description || ''}
                 if (user?.waitingForAge &&
                     (text === '👨 Мужской' || text === '👩 Женский')) {
                     await this.bot.sendMessage(chatID, '❌ Сейчас нужно ввести возраст числом.');
+                    return;
+                }
+
+                // Ввод текста сообщения, прикреплённого к лайку (кнопка 💌)
+                if (user?.pendingMessageTo) {
+                    if (!text || text.startsWith('/') ||
+                        text === '❤️' || text === '💌' || text === '❌') {
+                        user.pendingMessageTo = null;
+                        await this.bot.sendMessage(chatID, '❌ Отправка сообщения отменена.');
+                        return;
+                    }
+
+                    await this.handlePendingMessage(chatID, text);
                     return;
                 }
 
@@ -1254,6 +1483,13 @@ ${user.description || ''}
                             }
                         }
                     );
+                    return;
+                }
+
+                // Кнопки клавиатуры анкеты: ❤️ / 💌 / ❌
+                if (user?.registered &&
+                    (text === '❤️' || text === '💌' || text === '❌')) {
+                    await this.handleDatingKeyboard(chatID, text);
                     return;
                 }
 
@@ -1732,25 +1968,6 @@ ${user.description || ''}
                         return;
                     }
 
-                    const result = this.likeService.createMatch(chatID, otherChatID);
-
-                    if (!result.success) {
-                        await this.bot.answerCallbackQuery(query.id, { text: result.message });
-                        return;
-                    }
-
-                    if (result.alreadyMatched) {
-                        await this.bot.answerCallbackQuery(query.id, {
-                            text: '❤️ Мэтч уже создан.'
-                        });
-
-                        await this.bot.editMessageReplyMarkup(
-                            { inline_keyboard: [] },
-                            { chat_id: chatID, message_id: query.message.message_id }
-                        ).catch(() => {});
-                        return;
-                    }
-
                     await this.bot.answerCallbackQuery(query.id, {
                         text: '❤️ У вас взаимная симпатия!'
                     });
@@ -1760,27 +1977,7 @@ ${user.description || ''}
                         { chat_id: chatID, message_id: query.message.message_id }
                     ).catch(() => {});
 
-                    const currentUsername = user.username ? `@${user.username}` : 'Username не указан';
-                    const otherUsername = likedUser.username ? `@${likedUser.username}` : 'Username не указан';
-
-                    if (user.photos && user.photos.length > 0) {
-                        await this.bot.sendPhoto(otherChatID, user.photos[0], {
-                            caption: `👤 ${user.name}, ${user.age}
-${this.formatLocation(user)}
-
-${user.description || ''}
-
-❤️ Этот пользователь ответил вам взаимностью!
-Telegram: ${currentUsername}`
-                        }).catch(error => {
-                            console.error('Ошибка отправки анкеты после мэтча:', error.message);
-                        });
-                    }
-
-                    await this.bot.sendMessage(
-                        chatID,
-                        `🎉 Это мэтч!\n\n❤️ Вы понравились друг другу!\n\nTelegram пользователя: ${otherUsername}`
-                    );
+                    await this.celebrateMatch(chatID, otherChatID);
                     return;
                 }
 
@@ -1851,31 +2048,10 @@ Telegram: ${currentUsername}`
 
                     if (!result.alreadyLiked) {
                         await this.bot.sendMessage(chatID, '❤️ Лайк отправлен! Ждём ответа.');
-
-                        await this.bot.sendMessage(
-                            otherChatID,
-                            '❤️ Вы понравились одному человеку!\n\nХотите посмотреть его анкету?',
-                            {
-                                reply_markup: {
-                                    inline_keyboard: [[
-                                        { text: '✅ Да', callback_data: `viewlike_${chatID}` },
-                                        { text: '❌ Нет', callback_data: `rejectlike_${chatID}` }
-                                    ]]
-                                }
-                            }
-                        ).catch(error => {
-                            console.error('Не удалось отправить уведомление о лайке:', error.message);
-                        });
+                        await this.notifyUserLike(chatID, otherChatID);
                     }
 
-                    const nextProfile = this.matchingService.findMatch(chatID);
-
-                    if (!nextProfile) {
-                        await this.bot.sendMessage(chatID, '😔 Больше подходящих анкет пока нет.');
-                        return;
-                    }
-
-                    await this.sendDatingProfile(chatID, nextProfile.chatID);
+                    await this.showNextProfile(chatID);
                 }
             } catch (error) {
                 console.error('Ошибка обработки нажатия:', error);

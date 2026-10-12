@@ -5,6 +5,7 @@ const User = require('./models/user')
 const UserRepository = require('./repositories/UserRepository')
 const ReportRepository = require('./repositories/ReportRepository')
 const ModeratorRepository = require('./repositories/ModeratorRepository')
+const MessageRepository = require('./repositories/MessageRepository')
 
 const RegistrationService = require('./services/RegistrationService')
 const LikeService = require('./services/LikeService')
@@ -12,6 +13,7 @@ const MatchingService = require('./services/MatchingService')
 const ProfileService = require('./services/ProfileService')
 const ReportService = require('./services/ReportService')
 const ModeratorService = require('./services/ModeratorService')
+const MessageService = require('./services/MessageService')
 const CityService = require('./services/CityService')
 const ContentFilter = require('./services/ContentFilter')
 
@@ -33,6 +35,7 @@ class Bot {
         this.userRepository = new UserRepository(db, User)
         this.reportRepository = new ReportRepository(db)
         this.moderatorRepository = new ModeratorRepository(db)
+        this.messageRepository = new MessageRepository(db)
 
         this.likeService = new LikeService(this.users)
         this.cityService = new CityService()
@@ -50,6 +53,7 @@ class Bot {
 
         this.reportService = new ReportService(this.reportRepository)
         this.moderatorService = new ModeratorService(this.moderatorRepository)
+        this.messageService = new MessageService(this.messageRepository)
 
         this.moderatorChatIDs = parseModeratorIDs(process.env.MODERATORSID || process.env.REPORT_CHAT_IDS)
 
@@ -65,7 +69,8 @@ class Bot {
             this.moderatorChatIDs,
             this.moderatorService,
             null,
-            this.userRepository
+            this.userRepository,
+            this.messageService
         )
 
         this.saveInterval = null
@@ -236,10 +241,6 @@ class Bot {
 
     registerCommands() {
         this.bot.setMyCommands([
-            {
-                command: 'start',
-                description: 'Запустить бота, начать все заново'
-            },
             {
                 command: 'myprofile',
                 description: 'Посмотреть свою анкету'
