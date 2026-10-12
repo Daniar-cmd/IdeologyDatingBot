@@ -82,6 +82,7 @@ class Bot {
 
         this.saveInterval = null
         this.moderationInterval = null
+        this.syncingModeration = false
     }
 
     async loadUsers() {
@@ -108,46 +109,75 @@ class Bot {
 
     // Подтягивает поля модерации из БД в память работающего бота, чтобы изменения
     // из консольной панели (баны/варны) применялись без перезапуска.
-    // Заодно снимает истёкшие временные баны.
+    // Заодно снимает истёкшие временные баны и уведомляет пользователя.
     async syncModerationFromDb() {
         if (typeof this.userRepository.getModerationStates !== 'function') {
             return
         }
 
-        const states = await this.userRepository.getModerationStates()
-        const now = Date.now()
+        // Защита от наложения запусков (setInterval 2с): иначе истёкший бан
+        // может обработаться дважды и пользователь получит два уведомления.
+        if (this.syncingModeration) {
+            return
+        }
 
-        for (const state of states) {
-            const user = this.users[state.chatID]
+        this.syncingModeration = true
 
-            if (!user) {
-                continue
-            }
+        try {
+            const states = await this.userRepository.getModerationStates()
+            const now = Date.now()
 
-            const expired = state.banned &&
-                state.bannedUntil &&
-                state.bannedUntil.getTime() <= now
+            for (const state of states) {
+                const user = this.users[state.chatID]
 
-            if (expired) {
-                user.banned = false
-                user.bannedUntil = null
+                if (!user) {
+                    continue
+                }
+
+                const expired = state.banned &&
+                    state.bannedUntil &&
+                    state.bannedUntil.getTime() <= now
+
+                if (expired) {
+                    user.banned = false
+                    user.bannedUntil = null
+                    user.warnings = state.warnings
+
+                    try {
+                        await this.userRepository.setModerationState(state.chatID, {
+                            banned: false,
+                            warnings: state.warnings,
+                            bannedUntil: null
+                        })
+
+                        console.log(`[Модерация] срок бана истёк: ${state.chatID}`)
+                        await this.notifyUser(state.chatID, '✅ Срок блокировки истёк — вы снова можете пользоваться ботом.')
+                    } catch (error) {
+                        console.error('Ошибка снятия истёкшего бана:', error.message)
+                    }
+
+                    continue
+                }
+
+                user.banned = state.banned
                 user.warnings = state.warnings
-
-                await this.userRepository.setModerationState(state.chatID, {
-                    banned: false,
-                    warnings: state.warnings,
-                    bannedUntil: null
-                }).catch(error => {
-                    console.error('Ошибка снятия истёкшего бана:', error.message)
-                })
-
-                console.log(`[Модерация] срок бана истёк: ${state.chatID}`)
-                continue
+                user.bannedUntil = state.bannedUntil
             }
+        } finally {
+            this.syncingModeration = false
+        }
+    }
 
-            user.banned = state.banned
-            user.warnings = state.warnings
-            user.bannedUntil = state.bannedUntil
+    // Уведомление пользователя (например, об истечении срока временного бана).
+    async notifyUser(chatID, text) {
+        if (!this.bot || !chatID) {
+            return
+        }
+
+        try {
+            await this.bot.sendMessage(chatID, text)
+        } catch (error) {
+            console.error(`Не удалось уведомить пользователя ${chatID}:`, error.message)
         }
     }
 
