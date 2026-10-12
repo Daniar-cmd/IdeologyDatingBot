@@ -64,7 +64,8 @@ async function initDatabase() {
                 created_at TIMESTAMPTZ DEFAULT NOW(),
                 processed_at TIMESTAMPTZ,
                 resolved_by TEXT,
-                resolved_action TEXT
+                resolved_action TEXT,
+                resolved_reason TEXT
             )
         `)
 
@@ -74,7 +75,8 @@ async function initDatabase() {
             ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'new',
             ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ,
             ADD COLUMN IF NOT EXISTS resolved_by TEXT,
-            ADD COLUMN IF NOT EXISTS resolved_action TEXT
+            ADD COLUMN IF NOT EXISTS resolved_action TEXT,
+            ADD COLUMN IF NOT EXISTS resolved_reason TEXT
         `)
 
         // Заморозка модераторов за неверные admin-ключи

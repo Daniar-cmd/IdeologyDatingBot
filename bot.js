@@ -16,19 +16,7 @@ const CityService = require('./services/CityService')
 const ContentFilter = require('./services/ContentFilter')
 
 const MessageHandler = require('./handlers/MessageHandler')
-
-// Список чатов-модераторов: MODERATORSID=[1001, 1002] или '1001,1002'
-function parseModeratorIDs(envValue) {
-    if (!envValue) {
-        return []
-    }
-
-    return String(envValue)
-        .replace(/[\[\]"']/g, '')
-        .split(',')
-        .map(part => Number(part.trim()))
-        .filter(id => Number.isInteger(id) && id > 0)
-}
+const { parseModeratorIDs } = require('./config/moderators')
 
 class Bot {
     constructor() {

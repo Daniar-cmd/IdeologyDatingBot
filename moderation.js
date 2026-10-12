@@ -10,6 +10,7 @@ const User = require('./models/user')
 const UserRepository = require('./repositories/UserRepository')
 const ModerationActionRepository = require('./repositories/ModerationActionRepository')
 const ReportRepository = require('./repositories/ReportRepository')
+const { parseModeratorIDs } = require('./config/moderators')
 const { db, initDatabase } = require('./database')
 
 // Формат: MODERATOR_ACCOUNTS=имя:пароль:telegramID, имя2:пароль2:telegramID
@@ -124,9 +125,14 @@ async function main() {
     const moderationActionRepository = new ModerationActionRepository(db)
     const reportRepository = new ReportRepository(db)
     const reportService = new ReportService(reportRepository)
+
+    // Один и тот же Telegram-клиент (без поллинга) используется для уведомлений
+    // пользователям и для принудительной отправки жалоб модераторам из консоли.
+    const notifier = createNotifier()
+
     const moderationActions = new ModerationActionsService({
         userRepository,
-        bot: createNotifier(),
+        bot: notifier,
         moderationActionRepository
     })
 
@@ -136,7 +142,9 @@ async function main() {
         accounts,
         userRepository,
         moderationActions,
-        reportService
+        reportService,
+        notifier,
+        moderatorChatIDs: parseModeratorIDs(process.env.MODERATORSID)
     })
 
     let ok = false

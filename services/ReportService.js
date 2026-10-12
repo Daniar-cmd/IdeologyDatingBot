@@ -70,8 +70,8 @@ class ReportService {
         return this.reportRepository.findById(id)
     }
 
-    // Меняет статус жалобы. Опционально сохраняет автора приговора и наказание.
-    async setStatus(reportID, status, { resolvedBy = null, resolvedAction = null } = {}) {
+    // Меняет статус жалобы. Опционально сохраняет автора приговора, наказание и причину.
+    async setStatus(reportID, status, { resolvedBy = null, resolvedAction = null, resolvedReason = null } = {}) {
         if (!['new', 'processed', 'dismissed'].includes(status)) {
             return { success: false }
         }
@@ -83,7 +83,8 @@ class ReportService {
 
         const report = await this.reportRepository.setStatus(id, status, {
             resolvedBy,
-            resolvedAction
+            resolvedAction,
+            resolvedReason
         })
 
         if (!report) {

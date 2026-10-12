@@ -4,7 +4,7 @@ const crypto = require('crypto')
 // Консольная админ-панель: вход по имени администратора и его личному паролю,
 // далее — локальное меню. Действия выполняются через ModerationActionsService.
 class ModerationConsole {
-    constructor({ input, output, accounts = [], userRepository = null, moderationActions = null, reportService = null }) {
+    constructor({ input, output, accounts = [], userRepository = null, moderationActions = null, reportService = null, notifier = null, moderatorChatIDs = [] }) {
         this.input = input
         this.output = output
         // Имена администраторов сравниваем без учёта регистра
@@ -17,6 +17,8 @@ class ModerationConsole {
         this.userRepository = userRepository
         this.moderationActions = moderationActions
         this.reportService = reportService
+        this.notifier = notifier
+        this.moderatorChatIDs = Array.isArray(moderatorChatIDs) ? moderatorChatIDs : []
         this.muted = false
 
         this.rl = readline.createInterface({
@@ -311,7 +313,7 @@ class ModerationConsole {
             const offset = (page - 1) * this.REPORTS_PER_PAGE
             const reports = await this.reportService.getReportsPage(this.REPORTS_PER_PAGE, offset)
 
-            this.renderReportsPage(account, page, totalPages, total, reports)
+            this.renderReportsPage(account, page, totalPages, total, reports, offset)
 
             const input = (await this.ask('\nВведите команду: ')).trim()
 
@@ -337,11 +339,25 @@ class ModerationConsole {
                 continue
             }
 
+            const readMatch = input.match(/^read\s+(\d+)$/i)
+
+            if (readMatch) {
+                await this.showReportDetails(Number(readMatch[1]), reports, offset)
+                continue
+            }
+
+            const sendMatch = input.match(/^send\s+(\d+)\s+(\S+)$/i)
+
+            if (sendMatch) {
+                await this.sendReportByNumber(Number(sendMatch[1]), sendMatch[2], reports, offset)
+                continue
+            }
+
             this.output.write('❌ Неверная команда.\n')
         }
     }
 
-    renderReportsPage(account, page, totalPages, total, reports) {
+    renderReportsPage(account, page, totalPages, total, reports, offset) {
         const border = '='.repeat(40)
         this.output.write(`\n${border}\n`)
         this.output.write('=== IdeologyDatingBot | Reports ===\n')
@@ -352,14 +368,14 @@ class ModerationConsole {
         if (reports.length === 0) {
             this.output.write('Список репортов пуст.\n\n')
         } else {
-            reports.forEach(report => {
+            reports.forEach((report, index) => {
+                const num = offset + index + 1
                 const reporter = this.describeParty(report.reporter_username, report.reporter_chat_id)
                 const reported = this.describeParty(report.reported_username, report.reported_chat_id)
                 const created = this.formatDateTime(report.created_at)
-                const reason = this.truncateText(report.reason || '—', 80)
                 const status = report.status === 'new' ? 'waiting' : 'complete'
 
-                let line = `#${report.id} | от: ${reporter} | на: ${reported} | ${created} | ${reason} | ${status}`
+                let line = `[${num}] #${report.id} | от: ${reporter} | на: ${reported} | ${created} | ${status}`
 
                 if (status === 'complete') {
                     const admin = report.resolved_by || '—'
@@ -373,6 +389,126 @@ class ModerationConsole {
 
         this.output.write('\nНавигация:\n')
         this.output.write('<  — предыдущая страница | >  — следующая страница | 0 — главное меню\n')
+    }
+
+    // Находит репорт по номеру из списка (нумерация сквозная, как в первой вкладке).
+    async resolveReportByNumber(number, reports, offset) {
+        if (!Number.isInteger(number) || number < 1) {
+            return null
+        }
+
+        const index = number - offset - 1
+
+        if (index >= 0 && index < reports.length) {
+            return reports[index]
+        }
+
+        const rows = await this.reportService.getReportsPage(1, number - 1)
+
+        return rows[0] || null
+    }
+
+    // Команда read <номер> — полный текст репорта (и приговор, если он есть).
+    async showReportDetails(number, reports, offset) {
+        const report = await this.resolveReportByNumber(number, reports, offset)
+
+        if (!report) {
+            this.output.write('❌ Нет репорта с таким номером.\n')
+            return
+        }
+
+        this.renderReportDetails(report)
+    }
+
+    renderReportDetails(report) {
+        const border = '='.repeat(40)
+        const status = report.status === 'new' ? 'waiting' : 'complete'
+
+        this.output.write(`\n${border}\n`)
+        this.output.write(`=== Report #${report.id} ===\n`)
+        this.output.write(`${border}\n`)
+        this.output.write(`От: ${this.describeParty(report.reporter_username, report.reporter_chat_id)}\n`)
+        this.output.write(`На: ${this.describeParty(report.reported_username, report.reported_chat_id)}\n`)
+        this.output.write(`Дата: ${this.formatDateTime(report.created_at)}\n`)
+        this.output.write(`Статус: ${status}\n`)
+        this.output.write(`\nТекст репорта:\n${report.reason || '—'}\n`)
+
+        if (status === 'complete') {
+            this.output.write(`\nАдмин: ${report.resolved_by || '—'}\n`)
+            this.output.write(`Наказание: ${this.punishmentLabel(report.resolved_action)}\n`)
+            this.output.write(`Причина наказания: ${report.resolved_reason || '—'}\n`)
+        }
+
+        this.output.write('\n')
+    }
+
+    // Команда send <номер> <ID|.> — принудительно отправить waiting-репорт модератору(ам).
+    async sendReportByNumber(number, target, reports, offset) {
+        const report = await this.resolveReportByNumber(number, reports, offset)
+
+        if (!report) {
+            this.output.write('❌ Нет репорта с таким номером.\n')
+            return
+        }
+
+        if (report.status !== 'new') {
+            this.output.write('❌ Репорт уже обработан — отправлять нечего.\n')
+            return
+        }
+
+        await this.sendReportToModerators(report, target)
+    }
+
+    async sendReportToModerators(report, target) {
+        if (!this.notifier) {
+            this.output.write('❌ Не подключён Telegram-клиент для отправки (notifier).\n')
+            return
+        }
+
+        let targets
+
+        if (target === '.') {
+            targets = this.moderatorChatIDs
+        } else {
+            const id = Number(target)
+
+            if (!Number.isInteger(id) || id <= 0) {
+                this.output.write('❌ Некорректный ID модератора. Укажите числовой ID или «.».\n')
+                return
+            }
+
+            targets = [id]
+        }
+
+        if (targets.length === 0) {
+            this.output.write('❌ Нет модераторов для отправки (MODERATORSID пуст).\n')
+            return
+        }
+
+        const text = `🚩 Пользователь ${this.describeParty(report.reporter_username, report.reporter_chat_id)} ` +
+            `пожаловался на пользователя ${this.describeParty(report.reported_username, report.reported_chat_id)}.\n\n` +
+            `Причина: ${report.reason}`
+
+        let sent = 0
+        let failed = 0
+
+        for (const modChatID of targets) {
+            try {
+                await this.notifier.sendMessage(modChatID, text, {
+                    reply_markup: {
+                        inline_keyboard: [[
+                            { text: '👁 Посмотреть', callback_data: `report_view_${report.id}` }
+                        ]]
+                    }
+                })
+                sent += 1
+            } catch (error) {
+                failed += 1
+                this.output.write(`❌ Не удалось отправить модератору ${modChatID}: ${error.message}\n`)
+            }
+        }
+
+        this.output.write(`✅ Репорт #${report.id} отправлен. Доставлено: ${sent}${failed ? `, ошибок: ${failed}` : ''}.\n`)
     }
 
     // «@username (chat_id)» либо «без username (chat_id)».
@@ -417,17 +553,6 @@ class ModerationConsole {
         const minutes = String(d.getMinutes()).padStart(2, '0')
 
         return `${day}.${month}.${year} ${hours}:${minutes}`
-    }
-
-    // Обрезает длинный текст до maxLength символов (с многоточием).
-    truncateText(text, maxLength) {
-        const value = String(text)
-
-        if (value.length <= maxLength) {
-            return value
-        }
-
-        return `${value.slice(0, maxLength - 1)}…`
     }
 
     // Разбирает команду вида: ban 1 24h "причина" | warn 1 "причина" | pardon 1 "комментарий"

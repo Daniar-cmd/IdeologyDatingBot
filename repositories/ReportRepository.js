@@ -7,7 +7,7 @@ class ReportRepository {
         const result = await this.db.query(
             `INSERT INTO reports (reporter_chat_id, reported_chat_id, reason, status)
              VALUES ($1, $2, $3, 'new')
-             RETURNING id, reporter_chat_id, reported_chat_id, reason, status, created_at, processed_at, resolved_by, resolved_action`,
+             RETURNING id, reporter_chat_id, reported_chat_id, reason, status, created_at, processed_at, resolved_by, resolved_action, resolved_reason`,
             [
                 String(report.reporterChatID),
                 String(report.reportedChatID),
@@ -20,7 +20,7 @@ class ReportRepository {
 
     async findById(id) {
         const result = await this.db.query(
-            `SELECT id, reporter_chat_id, reported_chat_id, reason, status, created_at, processed_at, resolved_by, resolved_action
+            `SELECT id, reporter_chat_id, reported_chat_id, reason, status, created_at, processed_at, resolved_by, resolved_action, resolved_reason
              FROM reports
              WHERE id = $1`,
             [id]
@@ -29,19 +29,20 @@ class ReportRepository {
         return result.rows[0] || null
     }
 
-    // Обновляет статус жалобы. Дополнительно можно сохранить автора приговора
-    // и наказание (resolvedBy/resolvedAction). COALESCE не даёт стереть уже
-    // записанные значения при вызове без этих аргументов.
-    async setStatus(id, status, { resolvedBy = null, resolvedAction = null } = {}) {
+    // Обновляет статус жалобы. Дополнительно можно сохранить автора приговора,
+    // наказание и причину наказания (resolvedBy/resolvedAction/resolvedReason).
+    // COALESCE не даёт стереть уже записанные значения при вызове без этих аргументов.
+    async setStatus(id, status, { resolvedBy = null, resolvedAction = null, resolvedReason = null } = {}) {
         const result = await this.db.query(
             `UPDATE reports
              SET status = $2,
                  processed_at = NOW(),
                  resolved_by = COALESCE($3, resolved_by),
-                 resolved_action = COALESCE($4, resolved_action)
+                 resolved_action = COALESCE($4, resolved_action),
+                 resolved_reason = COALESCE($5, resolved_reason)
              WHERE id = $1
-             RETURNING id, reporter_chat_id, reported_chat_id, reason, status, created_at, processed_at, resolved_by, resolved_action`,
-            [id, status, resolvedBy, resolvedAction]
+             RETURNING id, reporter_chat_id, reported_chat_id, reason, status, created_at, processed_at, resolved_by, resolved_action, resolved_reason`,
+            [id, status, resolvedBy, resolvedAction, resolvedReason]
         )
 
         return result.rows[0] || null
@@ -51,7 +52,7 @@ class ReportRepository {
     async findAllWithUsers({ limit, offset } = {}) {
         const result = await this.db.query(
             `SELECT r.id, r.reporter_chat_id, r.reported_chat_id, r.reason, r.status,
-                    r.created_at, r.processed_at, r.resolved_by, r.resolved_action,
+                    r.created_at, r.processed_at, r.resolved_by, r.resolved_action, r.resolved_reason,
                     reporter.username AS reporter_username,
                     reported.username AS reported_username
              FROM reports r

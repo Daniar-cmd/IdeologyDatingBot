@@ -336,7 +336,8 @@ ${user.description || ''}`;
             await this.persistModeration(targetUser);
             await this.reportService.setStatus(report.id, 'processed', {
                 resolvedBy: state.moderatorName,
-                resolvedAction: 'ban'
+                resolvedAction: 'ban',
+                resolvedReason: state.reason
             });
 
             await this.bot.sendMessage(
@@ -350,7 +351,8 @@ ${user.description || ''}`;
             await this.persistModeration(targetUser);
             await this.reportService.setStatus(report.id, 'processed', {
                 resolvedBy: state.moderatorName,
-                resolvedAction: 'warn'
+                resolvedAction: 'warn',
+                resolvedReason: state.reason
             });
 
             await this.bot.sendMessage(
