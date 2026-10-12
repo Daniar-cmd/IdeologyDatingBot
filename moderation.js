@@ -58,7 +58,7 @@ function parseSingleAccount() {
     return { name, password, telegramID }
 }
 
-// Аккаунты модераторов: MODERATOR_ACCOUNTS (несколько) либо
+// Аккаунты администраторов: MODERATOR_ACCOUNTS (несколько) либо
 // MODERATOR_NAME + MODERATOR_PIN (один). Вход всегда по имени и паролю.
 function resolveAccounts() {
     const many = parseAccounts(process.env.MODERATOR_ACCOUNTS)
@@ -88,16 +88,16 @@ function createNotifier() {
 }
 
 async function main() {
-    // Имя модератора передаётся аргументом (npm run moder daniiar)
+    // Имя администратора передаётся аргументом (npm run admin daniiar)
     // или вводится интерактивно, если аргумент не пробросился.
     const name = (process.argv[2] || '').trim()
 
     const accounts = resolveAccounts()
 
-    // Диагностика без входа и без БД: npm run moder -- --list
+    // Диагностика без входа и без БД: npm run admin -- --list
     if (name === '--list' || name === '--moderators' || name === 'list') {
         console.log('MODERATOR_ACCOUNTS:', process.env.MODERATOR_ACCOUNTS ? 'задана' : 'НЕ ЗАДАНА')
-        console.log('Настроено аккаунтов модераторов:', accounts.length)
+        console.log('Настроено аккаунтов администраторов:', accounts.length)
 
         for (const account of accounts) {
             const id = account.telegramID ?? '—'
@@ -112,7 +112,7 @@ async function main() {
     }
 
     if (accounts.length === 0) {
-        console.error('❌ В .env не настроены аккаунты модераторов (MODERATOR_ACCOUNTS).')
+        console.error('❌ В .env не настроены аккаунты администраторов (MODERATOR_ACCOUNTS).')
         process.exit(1)
     }
 

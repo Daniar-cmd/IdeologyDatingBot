@@ -7,7 +7,7 @@
     "start": "node index.js",
     "console": "node console.js",
     "moderation": "node moderation.js",
-    "moder": "node moderation.js"
+    "admin": "node moderation.js"
   },
   "keywords": [],
   "author": "",

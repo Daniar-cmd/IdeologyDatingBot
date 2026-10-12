@@ -1,13 +1,13 @@
 const readline = require('readline')
 const crypto = require('crypto')
 
-// Консольная панель модерации: вход по имени модератора и его личному паролю,
-// далее — локальное меню. Действия модерации выполняются через ModerationActionsService.
+// Консольная админ-панель: вход по имени администратора и его личному паролю,
+// далее — локальное меню. Действия выполняются через ModerationActionsService.
 class ModerationConsole {
     constructor({ input, output, accounts = [], userRepository = null, moderationActions = null }) {
         this.input = input
         this.output = output
-        // Имена модераторов сравниваем без учёта регистра
+        // Имена администраторов сравниваем без учёта регистра
         this.accounts = new Map(
             accounts.map(({ name, password, telegramID }) => [
                 String(name).toLowerCase(),
@@ -42,7 +42,7 @@ class ModerationConsole {
             ['1', 'Список пользователей'],
             ['2', 'Репорты'],
             ['3', 'Заблокированные пользователи'],
-            ['4', 'История модерации']
+            ['4', 'История администрирования']
         ])
 
         this.USERS_PER_PAGE = 50
@@ -54,26 +54,26 @@ class ModerationConsole {
         }
     }
 
-    // Вход: имя модератора -> пароль -> меню. Возвращает true/false.
+    // Вход: имя админа -> пароль -> меню. Возвращает true/false.
     async start(name) {
         let resolvedName = String(name || '').trim()
 
-        // Имя модератора передаётся аргументом (npm run moder daniiar),
+        // Имя администратора передаётся аргументом (npm run admin daniiar),
         // если не передано — спрашиваем интерактивно.
         if (!resolvedName) {
-            resolvedName = (await this.ask('👤 Имя модератора: ')).trim()
+            resolvedName = (await this.ask('👤 Имя админа: ')).trim()
         }
 
         const account = this.accounts.get(resolvedName.toLowerCase())
 
         if (!account) {
             const configured = [...this.accounts.values()].map(item => item.name).join(', ') || '(нет)'
-            this.output.write(`❌ Модератор «${resolvedName}» не найден. Настроенные модераторы: ${configured}\n`)
+            this.output.write(`❌ Админ «${resolvedName}» не найден. Настроенные админы: ${configured}\n`)
             this.close()
             return false
         }
 
-        const password = await this.askSecret('🔑 Пароль модератора: ')
+        const password = await this.askSecret('🔑 Пароль админа: ')
         // Убираем возможные \r/\n, которые иногда проскакивают в не-TTY окружении (веб-консоль сервера)
         const normalized = String(password ?? '').replace(/[\r\n]+$/, '')
 
@@ -84,7 +84,7 @@ class ModerationConsole {
             return false
         }
 
-        this.output.write(`✅ Вход выполнен. Модератор: ${account.name}\n`)
+        this.output.write(`✅ Вход выполнен. Админ: ${account.name}\n`)
         await this.menuLoop(account)
         this.close()
         return true
@@ -120,9 +120,9 @@ class ModerationConsole {
     printHeader(account) {
         const border = '='.repeat(32)
         this.output.write(`\n${border}\n`)
-        this.output.write('=== IdeologyDatingBot | Moderation ===\n')
+        this.output.write('=== IdeologyDatingBot | Admin ===\n')
         this.output.write(`${border}\n`)
-        this.output.write(`Модератор: ${account.name}\n`)
+        this.output.write(`Админ: ${account.name}\n`)
     }
 
     printMenu() {
@@ -130,7 +130,7 @@ class ModerationConsole {
         this.output.write('1. Список пользователей\n')
         this.output.write('2. Репорты\n')
         this.output.write('3. Заблокированные пользователи\n')
-        this.output.write('4. История модерации\n')
+        this.output.write('4. История администрирования\n')
         this.output.write('0. Выход.\n')
     }
 
@@ -256,7 +256,7 @@ class ModerationConsole {
         this.output.write(`\n${border}\n`)
         this.output.write('=== IdeologyDatingBot | Users List ===\n')
         this.output.write(`${border}\n`)
-        this.output.write(`Модератор: ${account.name}\n`)
+        this.output.write(`Админ: ${account.name}\n`)
         this.output.write(`Страница: ${page}/${totalPages} | Всего: ${total}\n\n`)
 
         if (users.length === 0) {
