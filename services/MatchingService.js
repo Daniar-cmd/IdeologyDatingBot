@@ -48,7 +48,15 @@ class MatchingService {
             if (otherUser.banned) {
                 continue
             }
-            if (user.gender === otherUser.gender) {
+            if (!user.gender || !otherUser.gender) {
+                continue
+            }
+            // Взаимный фильтр по предпочтениям: ты видишь тех, кого ищешь,
+            // и только они могут видеть твою анкету.
+            if (!user.isInterestedIn(otherUser.gender)) {
+                continue
+            }
+            if (!otherUser.isInterestedIn(user.gender)) {
                 continue
             }
             if (!this.canSee(user, otherUser)) {

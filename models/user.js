@@ -5,6 +5,7 @@ class User {
         registered = false,
         name = null,
         gender = null,
+        lookingFor = null,
         age = null,
         description = '',
         city = null,
@@ -28,6 +29,10 @@ class User {
         this.registered = registered
         this.name = name
         this.gender = gender
+        // Кого ищет пользователь: 'male' | 'female' | 'any' | null (не выбран).
+        // Для старых анкет без значения действует правило по умолчанию:
+        // девушки видят парней, парни — девушек (см. searchPreference).
+        this.lookingFor = lookingFor || null
         this.age = age
         this.description = description
         this.city = city
@@ -56,6 +61,31 @@ class User {
             (this.city || this.isGlobal) &&
             this.photos.length > 0
         )
+    }
+
+    // Кого пользователь ищет: 'male' | 'female' | 'any'.
+    // Если выбор не сделан (старые анкеты) — противоположный пол.
+    searchPreference() {
+        if (this.lookingFor === 'male' || this.lookingFor === 'female' || this.lookingFor === 'any') {
+            return this.lookingFor
+        }
+
+        if (this.gender === 'male') {
+            return 'female'
+        }
+
+        if (this.gender === 'female') {
+            return 'male'
+        }
+
+        return 'any'
+    }
+
+    // Подходит ли анкета пола gender под предпочтения пользователя.
+    isInterestedIn(gender) {
+        const preference = this.searchPreference()
+
+        return preference === 'any' || preference === gender
     }
 
     // Учитывает срок временного бана: истёкший бан активным не считается.

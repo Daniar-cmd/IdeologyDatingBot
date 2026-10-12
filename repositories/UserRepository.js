@@ -37,6 +37,7 @@ class UserRepository {
                 registered: Boolean(row.registered),
                 name: row.name || null,
                 gender: row.gender || null,
+                lookingFor: row.looking_for || null,
                 age: row.age ?? null,
                 description: row.description || '',
                 city: row.city || null,
@@ -92,11 +93,12 @@ class UserRepository {
                 liked_by,
                 viewed,
                 matches,
-                state
+                state,
+                looking_for
             )
             VALUES (
                 $1, $2, $3, $4, $5, $6, $7,
-                $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+                $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
             )
             ON CONFLICT (chat_id) DO UPDATE SET
                 username = EXCLUDED.username,
@@ -113,7 +115,8 @@ class UserRepository {
                 liked_by = EXCLUDED.liked_by,
                 viewed = EXCLUDED.viewed,
                 matches = EXCLUDED.matches,
-                state = EXCLUDED.state
+                state = EXCLUDED.state,
+                looking_for = EXCLUDED.looking_for
         `, [
             String(user.chatID),
             user.username || null,
@@ -133,7 +136,8 @@ class UserRepository {
             JSON.stringify(user.likedBy || []),
             JSON.stringify(user.viewed || []),
             JSON.stringify(user.matches || []),
-            state
+            state,
+            user.lookingFor || null
         ])
     }
 

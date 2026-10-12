@@ -23,6 +23,7 @@ async function initDatabase() {
                 registered INTEGER DEFAULT 0,
                 name TEXT,
                 gender TEXT,
+                looking_for TEXT,
                 age INTEGER,
                 description TEXT DEFAULT '',
                 city TEXT,
@@ -47,6 +48,7 @@ async function initDatabase() {
         // Добавляем колонки для уже существующих таблиц (без разрушения данных)
         await db.query(`
             ALTER TABLE users
+            ADD COLUMN IF NOT EXISTS looking_for TEXT,
             ADD COLUMN IF NOT EXISTS matches JSONB DEFAULT '[]'::jsonb,
             ADD COLUMN IF NOT EXISTS is_global BOOLEAN DEFAULT FALSE,
             ADD COLUMN IF NOT EXISTS hidden BOOLEAN DEFAULT FALSE,

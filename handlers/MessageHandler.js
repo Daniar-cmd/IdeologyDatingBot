@@ -1054,7 +1054,32 @@ ${user.description || ''}
 
                     await this.bot.sendMessage(
                         chatID,
-                        '✅ Пол сохранён.\n\n🎂 Сколько вам лет?\n\nМинимальный возраст для регистрации — 16 лет.\n\n⚠️ Пожалуйста, указывайте реальный возраст. Подделка возраста недопустима.',
+                        '✅ Пол сохранён.\n\n👀 Кого вы хотите найти?\n\nЭто влияет на то, кого видите вы, и кто может видеть вашу анкету.',
+                        {
+                            reply_markup: {
+                                keyboard: [['👨 Парней', '👩 Девушек'], ['🤷 Всё равно']],
+                                resize_keyboard: true,
+                                one_time_keyboard: true
+                            }
+                        }
+                    );
+                    return;
+                }
+
+                if (user.waitingForLookingFor) {
+                    const result = this.registrationService.setLookingFor(chatID, text);
+
+                    if (!result.success) {
+                        await this.bot.sendMessage(
+                            chatID,
+                            result.message || 'Пожалуйста, выберите один из вариантов с помощью кнопок.'
+                        );
+                        return;
+                    }
+
+                    await this.bot.sendMessage(
+                        chatID,
+                        '✅ Сохранено.\n\n🎂 Сколько вам лет?\n\nМинимальный возраст для регистрации — 16 лет.\n\n⚠️ Пожалуйста, указывайте реальный возраст. Подделка возраста недопустима.',
                         { reply_markup: { remove_keyboard: true } }
                     );
                     return;

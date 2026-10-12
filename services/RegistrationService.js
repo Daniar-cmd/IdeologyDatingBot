@@ -33,6 +33,7 @@ restartRegistration(chatID) {
     user.registered = true
     user.name = null
     user.gender = null
+    user.lookingFor = null
     user.age = null
     user.description = ''
     user.city = null
@@ -44,6 +45,7 @@ restartRegistration(chatID) {
 
     user.waitingForInvite = false
     user.waitingForGender = false
+    user.waitingForLookingFor = false
     user.waitingForAge = false
     user.waitingForDescription = false
     user.waitingForCity = false
@@ -131,6 +133,31 @@ setGender(chatID, text) {
         }
     }
     user.waitingForGender = false
+    user.waitingForLookingFor = true
+    return {
+        success: true,
+        user
+    }
+}
+// Кого ищет пользователь: парней / всё равно / девушек.
+setLookingFor(chatID, text) {
+    const user = this.users[Number(chatID)]
+    if (!user || !user.waitingForLookingFor) {
+        return { success: false }
+    }
+    if (text === '👨 Парней') {
+        user.lookingFor = 'male'
+    } else if (text === '👩 Девушек') {
+        user.lookingFor = 'female'
+    } else if (text === '🤷 Всё равно') {
+        user.lookingFor = 'any'
+    } else {
+        return {
+            success: false,
+            message: 'Пожалуйста, выберите один из вариантов с помощью кнопок.'
+        }
+    }
+    user.waitingForLookingFor = false
     user.waitingForAge = true
     return {
         success: true,
