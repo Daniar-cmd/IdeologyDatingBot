@@ -4,7 +4,7 @@ const crypto = require('crypto')
 // Консольная панель модерации: вход по имени модератора и его личному паролю,
 // далее — локальное меню. Действия модерации выполняются через ModerationActionsService.
 class ModerationConsole {
-    constructor({ input, output, accounts = [], autoLogin = false, userRepository = null, moderationActions = null }) {
+    constructor({ input, output, accounts = [], userRepository = null, moderationActions = null }) {
         this.input = input
         this.output = output
         // Имена модераторов сравниваем без учёта регистра
@@ -14,7 +14,6 @@ class ModerationConsole {
                 { name, password, telegramID }
             ])
         )
-        this.autoLogin = autoLogin
         this.userRepository = userRepository
         this.moderationActions = moderationActions
         this.muted = false
@@ -59,21 +58,8 @@ class ModerationConsole {
     async start(name) {
         let resolvedName = String(name || '').trim()
 
-        // Если модератор задан через MODERATOR_NAME/MODERATOR_PIN, пароль уже известен
-        // из окружения — входим без интерактивного ввода (удобно для веб-консоли хостинга).
-        if (this.autoLogin && this.accounts.size === 1) {
-            const account = [...this.accounts.values()][0]
-
-            if (!resolvedName || resolvedName.toLowerCase() === account.name.toLowerCase()) {
-                this.output.write(`✅ Вход выполнен. Модератор: ${account.name}\n`)
-                await this.menuLoop(account)
-                this.close()
-                return true
-            }
-        }
-
-        // Имя можно не передавать аргументом (например, старый npm не прокидывает аргументы) —
-        // тогда спрашиваем его интерактивно.
+        // Имя модератора передаётся аргументом (npm run moder daniiar),
+        // если не передано — спрашиваем интерактивно.
         if (!resolvedName) {
             resolvedName = (await this.ask('👤 Имя модератора: ')).trim()
         }
@@ -93,7 +79,7 @@ class ModerationConsole {
 
         if (!this.verifyPassword(normalized, account.password)) {
             this.output.write('❌ Неверный пароль. Доступ запрещён.\n')
-            this.output.write('ℹ️  Пароль берётся из MODERATOR_ACCOUNTS (или MODERATOR_PIN). Переменные окружения имеют приоритет над .env.\n')
+            this.output.write('ℹ️  Пароль берётся из MODERATOR_ACCOUNTS. Переменные окружения имеют приоритет над .env.\n')
             this.close()
             return false
         }
@@ -257,8 +243,7 @@ class ModerationConsole {
             const parsed = this.parseAction(input)
 
             if (!parsed) {
-                this.output.write('❌ Неверная команда. Используйте <, >, 0 или ban/varn/pardon <номер>.')
-                this.output.write('\n')
+                this.output.write('❌ Неверная команда.\n')
                 continue
             }
 
@@ -294,25 +279,17 @@ class ModerationConsole {
 
         this.output.write('\nНавигация:\n')
         this.output.write('<  — предыдущая страница | >  — следующая страница | 0 — главное меню\n')
-        this.output.write('Действия:\n')
-        this.output.write('  ban <номер> [срок] ["причина"]      — забанить (срок: 60m, 24h, 30d, 1y)\n')
-        this.output.write('  varn <номер> ["причина"]            — предупреждение (3 → бан)\n')
-        this.output.write('  pardon <номер> ["комментарий"]      — разбанить\n')
     }
 
-    // Разбирает команду вида: ban 1 24h "причина" | varn 1 "причина" | pardon 1 "комментарий"
+    // Разбирает команду вида: ban 1 24h "причина" | warn 1 "причина" | pardon 1 "комментарий"
     parseAction(input) {
-        const match = String(input).trim().match(/^(ban|varn|warn|pardon)\s+(\d+)\s*(.*)$/i)
+        const match = String(input).trim().match(/^(ban|warn|pardon)\s+(\d+)\s*(.*)$/i)
 
         if (!match) {
             return null
         }
 
-        let command = match[1].toLowerCase()
-
-        if (command === 'warn') {
-            command = 'varn'
-        }
+        const command = match[1].toLowerCase()
 
         const number = parseInt(match[2], 10)
         let rest = match[3].trim()
@@ -365,7 +342,7 @@ class ModerationConsole {
             return
         }
 
-        if (command === 'varn') {
+        if (command === 'warn') {
             const result = await this.moderationActions.warn(target, { reason, actor })
 
             if (result.ok) {

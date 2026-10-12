@@ -6,7 +6,8 @@
     "dev": "nodemon index.js",
     "start": "node index.js",
     "console": "node console.js",
-    "moderation": "node moderation.js"
+    "moderation": "node moderation.js",
+    "moder": "node moderation.js"
   },
   "keywords": [],
   "author": "",

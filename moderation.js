@@ -58,23 +58,18 @@ function parseSingleAccount() {
     return { name, password, telegramID }
 }
 
-// Источники настроек в порядке приоритета:
-// 1) MODERATOR_ACCOUNTS (несколько модераторов) — вход по имени и паролю;
-// 2) MODERATOR_NAME + MODERATOR_PIN (один модератор) — вход без запроса пароля.
+// Аккаунты модераторов: MODERATOR_ACCOUNTS (несколько) либо
+// MODERATOR_NAME + MODERATOR_PIN (один). Вход всегда по имени и паролю.
 function resolveAccounts() {
     const many = parseAccounts(process.env.MODERATOR_ACCOUNTS)
 
     if (many.length > 0) {
-        return { accounts: many, autoLogin: false }
+        return many
     }
 
     const single = parseSingleAccount()
 
-    if (single) {
-        return { accounts: [single], autoLogin: true }
-    }
-
-    return { accounts: [], autoLogin: false }
+    return single ? [single] : []
 }
 
 // Отправка уведомлений пользователям из консоли. Поллинг отключён,
@@ -93,18 +88,15 @@ function createNotifier() {
 }
 
 async function main() {
-    // Имя модератора можно передать аргументом (npm run moderation daniiar)
-    // или ввести интерактивно, если аргумент не пробросился.
+    // Имя модератора передаётся аргументом (npm run moder daniiar)
+    // или вводится интерактивно, если аргумент не пробросился.
     const name = (process.argv[2] || '').trim()
 
-    const { accounts, autoLogin } = resolveAccounts()
+    const accounts = resolveAccounts()
 
-    // Диагностика без входа и без БД: npm run moderation --list
+    // Диагностика без входа и без БД: npm run moder -- --list
     if (name === '--list' || name === '--moderators' || name === 'list') {
         console.log('MODERATOR_ACCOUNTS:', process.env.MODERATOR_ACCOUNTS ? 'задана' : 'НЕ ЗАДАНА')
-        console.log('MODERATOR_NAME:', process.env.MODERATOR_NAME ? 'задана' : 'НЕ ЗАДАНА')
-        console.log('MODERATOR_PIN:', process.env.MODERATOR_PIN ? 'задана' : 'НЕ ЗАДАНА')
-        console.log('Режим:', autoLogin ? 'один модератор (вход без пароля)' : 'по имени и паролю')
         console.log('Настроено аккаунтов модераторов:', accounts.length)
 
         for (const account of accounts) {
@@ -113,16 +105,14 @@ async function main() {
         }
 
         if (accounts.length === 0) {
-            console.log('  Задай MODERATOR_ACCOUNTS=имя:пароль:telegramID либо MODERATOR_NAME + MODERATOR_PIN.')
+            console.log('  Задай MODERATOR_ACCOUNTS=имя:пароль:telegramID')
         }
 
         return
     }
 
     if (accounts.length === 0) {
-        console.error('❌ Не настроены модераторы.')
-        console.error('   Задай MODERATOR_ACCOUNTS=имя:пароль:telegramID')
-        console.error('   или MODERATOR_NAME + MODERATOR_PIN (один модератор).')
+        console.error('❌ В .env не настроены аккаунты модераторов (MODERATOR_ACCOUNTS).')
         process.exit(1)
     }
 
@@ -140,7 +130,6 @@ async function main() {
         input: process.stdin,
         output: process.stdout,
         accounts,
-        autoLogin,
         userRepository,
         moderationActions
     })
