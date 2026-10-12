@@ -1,4 +1,5 @@
-require('dotenv').config({ quiet: true })
+const path = require('path')
+require('dotenv').config({ quiet: true, path: path.resolve(__dirname, '.env') })
 
 const ModerationConsole = require('./cli/ModerationConsole')
 const User = require('./models/user')
