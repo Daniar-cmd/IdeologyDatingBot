@@ -190,6 +190,19 @@ class ModerationConsole {
         return crypto.timingSafeEqual(inputHash, expectedHash)
     }
 
+    // Подтверждение действия личным пином администратора (он же пароль входа).
+    // Возвращает true, только если введён верный пин; иначе действие отменяется.
+    async confirmActionPin(account) {
+        const input = await this.askSecret('🔐 Подтвердите действие личным пином: ')
+
+        if (this.verifyPassword(input, account.password)) {
+            return true
+        }
+
+        this.output.write('❌ Неверный пин. Действие отменено.\n')
+        return false
+    }
+
     formatDate(date) {
         if (!date) {
             return '—'
@@ -251,6 +264,10 @@ class ModerationConsole {
 
             if (input === '0') {
                 return
+            }
+
+            if (input.toLowerCase() === 'update') {
+                continue
             }
 
             if (input === '<') {
@@ -343,6 +360,10 @@ class ModerationConsole {
                 return
             }
 
+            if (input.toLowerCase() === 'update') {
+                continue
+            }
+
             if (input === '<') {
                 if (page <= 1) {
                     this.output.write('❌ Это первая страница.\n')
@@ -371,7 +392,7 @@ class ModerationConsole {
             const sendMatch = input.match(/^send\s+(\d+)\s+(\S+)$/i)
 
             if (sendMatch) {
-                await this.sendReportByNumber(Number(sendMatch[1]), sendMatch[2], reports, offset)
+                await this.sendReportByNumber(account, Number(sendMatch[1]), sendMatch[2], reports, offset)
                 continue
             }
 
@@ -477,7 +498,7 @@ class ModerationConsole {
     }
 
     // Команда send <номер> <ID|.> — принудительно отправить waiting-репорт модератору(ам).
-    async sendReportByNumber(number, target, reports, offset) {
+    async sendReportByNumber(account, number, target, reports, offset) {
         const report = await this.resolveReportByNumber(number, reports, offset)
 
         if (!report) {
@@ -487,6 +508,10 @@ class ModerationConsole {
 
         if (report.status !== 'new') {
             this.output.write('❌ Репорт уже обработан — отправлять нечего.\n')
+            return
+        }
+
+        if (!(await this.confirmActionPin(account))) {
             return
         }
 
@@ -598,6 +623,10 @@ class ModerationConsole {
 
             if (input === '0') {
                 return
+            }
+
+            if (input.toLowerCase() === 'update') {
+                continue
             }
 
             if (input === '<') {
@@ -753,6 +782,10 @@ class ModerationConsole {
         const actor = { name: account.name, telegramID: account.telegramID }
         const label = target.chatID
 
+        if (!(await this.confirmActionPin(account))) {
+            return
+        }
+
         if (parsed.command === 'pardon') {
             const result = await this.moderationActions.pardon(target, { note: parsed.note, actor })
 
@@ -817,6 +850,10 @@ class ModerationConsole {
 
             if (input === '0') {
                 return
+            }
+
+            if (input.toLowerCase() === 'update') {
+                continue
             }
 
             if (input === '<') {
@@ -1101,6 +1138,10 @@ class ModerationConsole {
                 return
             }
 
+            if (input.toLowerCase() === 'update') {
+                continue
+            }
+
             if (input === '<') {
                 if (page <= 1) {
                     this.output.write('❌ Это первая страница.\n')
@@ -1152,7 +1193,7 @@ class ModerationConsole {
                     continue
                 }
 
-                await this.removeModerator(target)
+                await this.removeModerator(account, target)
                 continue
             }
 
@@ -1197,7 +1238,6 @@ class ModerationConsole {
 
         this.output.write('\nНавигация:\n')
         this.output.write('<  — предыдущая страница | >  — следующая страница | 0 — главное меню\n')
-        this.output.write('Команды: invite <chat_id> — пригласить | remove <номер|chat_id> — снять права | read <номер> — подробности.\n')
     }
 
     // Команда invite — приглашение в модераторы. Код печатается здесь и передаётся
@@ -1212,6 +1252,10 @@ class ModerationConsole {
 
         if (existing && existing.status === 'active') {
             this.output.write(`❌ Пользователь ${chatID} уже модератор.\n`)
+            return
+        }
+
+        if (!(await this.confirmActionPin(account))) {
             return
         }
 
@@ -1243,9 +1287,13 @@ class ModerationConsole {
         }
     }
 
-    async removeModerator(target) {
+    async removeModerator(account, target) {
         if (target.status === 'removed') {
             this.output.write(`ℹ️  Модератор ${target.chatID} уже снят.\n`)
+            return
+        }
+
+        if (!(await this.confirmActionPin(account))) {
             return
         }
 
@@ -1380,6 +1428,10 @@ class ModerationConsole {
 
         const target = allUsers[number - 1]
         const actor = { name: account.name, telegramID: account.telegramID }
+
+        if (!(await this.confirmActionPin(account))) {
+            return
+        }
 
         if (command === 'ban') {
             const result = await this.moderationActions.ban(target, { durationText, reason, actor })
