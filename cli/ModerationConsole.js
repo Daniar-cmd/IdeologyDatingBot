@@ -342,7 +342,7 @@ class ModerationConsole {
             const readMatch = input.match(/^read\s+(\d+)$/i)
 
             if (readMatch) {
-                await this.showReportDetails(Number(readMatch[1]), reports, offset)
+                await this.showReportCard(Number(readMatch[1]), reports, offset)
                 continue
             }
 
@@ -408,8 +408,9 @@ class ModerationConsole {
         return rows[0] || null
     }
 
-    // Команда read <номер> — полный текст репорта (и приговор, если он есть).
-    async showReportDetails(number, reports, offset) {
+    // Команда read <номер> — отдельный экран репорта: полный текст жалобы и,
+    // для решённых, причина наказания. Выход — 0.
+    async showReportCard(number, reports, offset) {
         const report = await this.resolveReportByNumber(number, reports, offset)
 
         if (!report) {
@@ -417,7 +418,18 @@ class ModerationConsole {
             return
         }
 
-        this.renderReportDetails(report)
+        while (true) {
+            this.renderReportDetails(report)
+            this.output.write('0 — назад к списку репортов\n')
+
+            const input = (await this.ask('\nВведите команду: ')).trim()
+
+            if (input === '0') {
+                return
+            }
+
+            this.output.write('❌ Неверная команда. Доступно: 0 — назад.\n')
+        }
     }
 
     renderReportDetails(report) {
