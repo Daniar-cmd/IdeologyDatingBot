@@ -4,7 +4,7 @@ const crypto = require('crypto')
 // Консольная админ-панель: вход по имени администратора и его личному паролю,
 // далее — локальное меню. Действия выполняются через ModerationActionsService.
 class ModerationConsole {
-    constructor({ input, output, accounts = [], userRepository = null, moderationActions = null, reportService = null, notifier = null, moderatorChatIDs = [] }) {
+    constructor({ input, output, accounts = [], userRepository = null, moderationActions = null, reportService = null, notifier = null, moderatorChatIDs = [], moderationActionRepository = null }) {
         this.input = input
         this.output = output
         // Имена администраторов сравниваем без учёта регистра
@@ -19,6 +19,7 @@ class ModerationConsole {
         this.reportService = reportService
         this.notifier = notifier
         this.moderatorChatIDs = Array.isArray(moderatorChatIDs) ? moderatorChatIDs : []
+        this.moderationActionRepository = moderationActionRepository
         this.muted = false
 
         this.rl = readline.createInterface({
@@ -51,6 +52,7 @@ class ModerationConsole {
         this.USERS_PER_PAGE = 50
         this.REPORTS_PER_PAGE = 50
         this.BANNED_PER_PAGE = 50
+        this.HISTORY_PER_PAGE = 50
     }
 
     close() {
@@ -119,6 +121,11 @@ class ModerationConsole {
 
             if (choice === '3') {
                 await this.showBannedList(account)
+                continue
+            }
+
+            if (choice === '4') {
+                await this.showHistoryList(account)
                 continue
             }
 
@@ -765,6 +772,213 @@ class ModerationConsole {
                 this.output.write(`❌ ${result.error}\n`)
             }
         }
+    }
+
+    // ---------------- Вкладка «4. История администрирования» ----------------
+
+    async showHistoryList(account) {
+        if (!this.moderationActionRepository) {
+            this.output.write('\n❌ Не подключён журнал действий (moderationActionRepository).\n\n')
+            return
+        }
+
+        let page = 1
+
+        while (true) {
+            const total = await this.moderationActionRepository.countAll()
+            const totalPages = Math.max(1, Math.ceil(total / this.HISTORY_PER_PAGE))
+
+            if (page > totalPages) {
+                page = totalPages
+            }
+
+            if (page < 1) {
+                page = 1
+            }
+
+            const offset = (page - 1) * this.HISTORY_PER_PAGE
+            const entries = await this.moderationActionRepository.getPage({
+                limit: this.HISTORY_PER_PAGE,
+                offset
+            })
+
+            this.renderHistoryPage(account, page, totalPages, total, entries, offset)
+
+            const input = (await this.ask('\nВведите команду: ')).trim()
+
+            if (input === '0') {
+                return
+            }
+
+            if (input === '<') {
+                if (page <= 1) {
+                    this.output.write('❌ Это первая страница.\n')
+                } else {
+                    page -= 1
+                }
+                continue
+            }
+
+            if (input === '>') {
+                if (page >= totalPages) {
+                    this.output.write('❌ Это последняя страница.\n')
+                } else {
+                    page += 1
+                }
+                continue
+            }
+
+            const readMatch = input.match(/^read\s+(\d+)$/i)
+
+            if (readMatch) {
+                await this.showHistoryCard(Number(readMatch[1]), entries, offset)
+                continue
+            }
+
+            this.output.write('❌ Неверная команда.\n')
+        }
+    }
+
+    renderHistoryPage(account, page, totalPages, total, entries, offset) {
+        const border = '='.repeat(40)
+        this.output.write(`\n${border}\n`)
+        this.output.write('=== IdeologyDatingBot | History ===\n')
+        this.output.write(`${border}\n`)
+        this.output.write(`Админ: ${account.name}\n`)
+        this.output.write(`Страница: ${page}/${totalPages} | Всего: ${total}\n\n`)
+
+        if (entries.length === 0) {
+            this.output.write('История пуста.\n\n')
+        } else {
+            entries.forEach((entry, index) => {
+                const num = offset + index + 1
+                const when = this.formatDateTime(entry.created_at)
+                const admin = entry.moderator_name || '—'
+                const action = this.historyActionLabel(entry.action)
+                const target = this.historyTargetLabel(entry)
+
+                this.output.write(`[${num}] ${when} | ${admin} | ${action} | ${target}\n`)
+            })
+        }
+
+        this.output.write('\nНавигация:\n')
+        this.output.write('<  — предыдущая страница | >  — следующая страница | 0 — главное меню\n')
+    }
+
+    // Находит запись истории по номеру (нумерация сквозная, как в других вкладках).
+    async resolveHistoryByNumber(number, entries, offset) {
+        if (!Number.isInteger(number) || number < 1) {
+            return null
+        }
+
+        const index = number - offset - 1
+
+        if (index >= 0 && index < entries.length) {
+            return entries[index]
+        }
+
+        const rows = await this.moderationActionRepository.getPage({ limit: 1, offset: number - 1 })
+
+        return rows[0] || null
+    }
+
+    // Команда read <номер> — подробности записи (срок, причина, комментарий). Выход — 0.
+    async showHistoryCard(number, entries, offset) {
+        const entry = await this.resolveHistoryByNumber(number, entries, offset)
+
+        if (!entry) {
+            this.output.write('❌ Нет записи с таким номером.\n')
+            return
+        }
+
+        while (true) {
+            this.renderHistoryDetails(entry)
+            this.output.write('0 — назад к истории\n')
+
+            const input = (await this.ask('\nВведите команду: ')).trim()
+
+            if (input === '0') {
+                return
+            }
+
+            this.output.write('❌ Неверная команда. Доступно: 0 — назад.\n')
+        }
+    }
+
+    renderHistoryDetails(entry) {
+        const border = '='.repeat(40)
+        const adminID = entry.moderator_telegram_id ? ` (${entry.moderator_telegram_id})` : ''
+
+        this.output.write(`\n${border}\n`)
+        this.output.write(`=== История #${entry.id} ===\n`)
+        this.output.write(`${border}\n`)
+        this.output.write(`Дата и время: ${this.formatDateTime(entry.created_at)}\n`)
+        this.output.write(`Админ: ${entry.moderator_name || '—'}${adminID}\n`)
+        this.output.write(`Действие: ${this.historyActionLabel(entry.action)}\n`)
+        this.output.write(`Цель: ${this.historyTargetLabel(entry)}\n`)
+
+        if (entry.duration_ms) {
+            this.output.write(`Срок: ${this.humanDuration(entry.duration_ms)}\n`)
+        }
+
+        this.output.write(`Причина: ${entry.reason || '—'}\n`)
+        this.output.write(`Комментарий: ${entry.note || '—'}\n`)
+        this.output.write('\n')
+    }
+
+    // Цель действия: «@username (chat_id)» либо только chat_id.
+    historyTargetLabel(entry) {
+        const id = entry.target_chat_id ?? '—'
+
+        return entry.target_username ? `@${entry.target_username} (${id})` : String(id)
+    }
+
+    // Код действия из moderation_actions → понятная подпись.
+    historyActionLabel(action) {
+        if (action === 'ban') {
+            return 'бан'
+        }
+
+        if (action === 'warn') {
+            return 'предупреждение'
+        }
+
+        if (action === 'pardon') {
+            return 'разбан'
+        }
+
+        if (action === 'permanent') {
+            return 'бессрочный бан'
+        }
+
+        if (action === 'extend') {
+            return 'продление срока'
+        }
+
+        return action || '—'
+    }
+
+    // Длительность в мс → «30 мин» / «5 ч» / «30 дн».
+    humanDuration(ms) {
+        const value = Number(ms)
+
+        if (!Number.isFinite(value) || value <= 0) {
+            return '—'
+        }
+
+        const minutes = Math.round(value / 60000)
+
+        if (minutes < 60) {
+            return `${minutes} мин`
+        }
+
+        const hours = Math.round(value / 3600000)
+
+        if (hours < 24) {
+            return `${hours} ч`
+        }
+
+        return `${Math.round(value / 86400000)} дн`
     }
 
     // «@username (chat_id)» либо «без username (chat_id)».

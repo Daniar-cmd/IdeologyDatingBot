@@ -144,7 +144,8 @@ async function main() {
         moderationActions,
         reportService,
         notifier,
-        moderatorChatIDs: parseModeratorIDs(process.env.MODERATORSID)
+        moderatorChatIDs: parseModeratorIDs(process.env.MODERATORSID),
+        moderationActionRepository
     })
 
     let ok = false
