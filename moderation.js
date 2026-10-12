@@ -63,6 +63,22 @@ async function main() {
 
     const accounts = parseAccounts(process.env.MODERATOR_ACCOUNTS)
 
+    // Диагностика без входа и без БД: npm run moderation --list
+    if (name === '--list' || name === '--moderators' || name === 'list') {
+        console.log('MODERATOR_ACCOUNTS:', process.env.MODERATOR_ACCOUNTS ? 'задана' : 'НЕ ЗАДАНА')
+        console.log('Настроено аккаунтов модераторов:', accounts.length)
+
+        for (const account of accounts) {
+            console.log(`  - ${account.name} (telegramID: ${account.telegramID})`)
+        }
+
+        if (accounts.length === 0) {
+            console.log('  (переменная пустая или неверный формат: имя:пароль:telegramID)')
+        }
+
+        return
+    }
+
     if (accounts.length === 0) {
         console.error('❌ В .env не настроены аккаунты модераторов (MODERATOR_ACCOUNTS).')
         process.exit(1)
