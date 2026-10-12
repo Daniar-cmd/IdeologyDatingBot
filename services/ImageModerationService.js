@@ -1,7 +1,7 @@
 const fs = require('fs')
 const path = require('path')
 
-const tf = require('@tensorflow/tfjs-node')
+const tf = require('@tensorflow/tfjs');
 const Jimp = require('jimp')
 const jsQR = require('jsqr')
 
