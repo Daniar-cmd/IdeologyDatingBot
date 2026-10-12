@@ -16,6 +16,7 @@ class User {
         matches = [],
         hidden = false,
         banned = false,
+        bannedUntil = null,
         warnings = 0,
         createdAt = null
     }) {
@@ -30,6 +31,7 @@ class User {
         this.isGlobal = Boolean(isGlobal)
         this.hidden = Boolean(hidden)
         this.banned = Boolean(banned)
+        this.bannedUntil = bannedUntil ? new Date(bannedUntil) : null
         this.warnings = Number(warnings) || 0
         this.createdAt = createdAt ? new Date(createdAt) : null
 
@@ -48,6 +50,19 @@ class User {
             (this.city || this.isGlobal) &&
             this.photos.length > 0
         )
+    }
+
+    // Учитывает срок временного бана: истёкший бан активным не считается.
+    isBannedNow() {
+        if (!this.banned) {
+            return false
+        }
+
+        if (!this.bannedUntil) {
+            return true
+        }
+
+        return this.bannedUntil.getTime() > Date.now()
     }
 
     hasLiked(chatID) {

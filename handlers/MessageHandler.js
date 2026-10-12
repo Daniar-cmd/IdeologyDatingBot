@@ -2,7 +2,7 @@ const ReportService = require('../services/ReportService')
 const ImageModerationService = require('../services/ImageModerationService')
 
 class MessageHandler {
-    constructor(bot, users, registrationService, profileService, matchingService, likeService, cityService, reportService, moderatorChatIDs = [], moderatorService = null, imageModerationService = null) {
+    constructor(bot, users, registrationService, profileService, matchingService, likeService, cityService, reportService, moderatorChatIDs = [], moderatorService = null, imageModerationService = null, userRepository = null) {
         this.bot = bot;
         this.users = users;
         this.registrationService = registrationService;
@@ -14,6 +14,7 @@ class MessageHandler {
         this.moderatorChatIDs = moderatorChatIDs;
         this.moderatorService = moderatorService;
         this.imageModerationService = imageModerationService || new ImageModerationService(bot);
+        this.userRepository = userRepository;
 
         // Состояние разбора жалобы в чате модератора:
         // { step, reportID, action, reason, attempts, deadline, timer }
@@ -331,6 +332,8 @@ ${user.description || ''}`;
 
         if (state.action === 'ban') {
             targetUser.applyBan();
+            targetUser.bannedUntil = null;
+            await this.persistModeration(targetUser);
             await this.reportService.setStatus(report.id, 'processed');
 
             await this.bot.sendMessage(
@@ -341,6 +344,7 @@ ${user.description || ''}`;
             await this.bot.sendMessage(chatID, '✅ Решение применено: пользователь забанен.');
         } else if (state.action === 'warn') {
             const result = targetUser.applyWarning();
+            await this.persistModeration(targetUser);
             await this.reportService.setStatus(report.id, 'processed');
 
             await this.bot.sendMessage(
@@ -367,6 +371,22 @@ ${user.description || ''}`;
         }
 
         this.endModeration(chatID);
+    }
+
+    // Сохраняет состояние модерации пользователя в БД. Нужно, потому что
+    // общее автосохранение анкет намеренно не трогает поля banned/warnings/banned_until.
+    async persistModeration(user) {
+        if (!this.userRepository || typeof this.userRepository.setModerationState !== 'function') {
+            return;
+        }
+
+        await this.userRepository.setModerationState(user.chatID, {
+            banned: user.banned,
+            warnings: user.warnings,
+            bannedUntil: user.bannedUntil || null
+        }).catch(error => {
+            console.error('Ошибка сохранения состояния модерации:', error.message);
+        });
     }
 
     formatLocation(user) {

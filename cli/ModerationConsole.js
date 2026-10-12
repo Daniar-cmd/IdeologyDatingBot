@@ -2,13 +2,17 @@ const readline = require('readline')
 const crypto = require('crypto')
 
 // Консольная панель модерации: вход по имени модератора и его личному паролю,
-// далее — локальное меню. Внутренняя логика разделов добавляется позже.
+// далее — локальное меню. Действия модерации выполняются через ModerationActionsService.
 class ModerationConsole {
     constructor({ input, output, accounts = [], userRepository = null, moderationActions = null }) {
         this.input = input
         this.output = output
+        // Имена модераторов сравниваем без учёта регистра
         this.accounts = new Map(
-            accounts.map(({ name, password, telegramID }) => [name, { name, password, telegramID }])
+            accounts.map(({ name, password, telegramID }) => [
+                String(name).toLowerCase(),
+                { name, password, telegramID }
+            ])
         )
         this.userRepository = userRepository
         this.moderationActions = moderationActions
@@ -31,8 +35,7 @@ class ModerationConsole {
 
         this.rl.on('SIGINT', () => {
             this.output.write('\n👋 До свидания!\n')
-            this.rl.close()
-            process.exit(0)
+            this.close()
         })
 
         this.menuItems = new Map([
@@ -45,24 +48,45 @@ class ModerationConsole {
         this.USERS_PER_PAGE = 50
     }
 
+    close() {
+        if (this.rl && !this.rl.closed) {
+            this.rl.close()
+        }
+    }
+
     // Вход: имя модератора -> пароль -> меню. Возвращает true/false.
     async start(name) {
-        const account = this.accounts.get(name)
+        let resolvedName = String(name || '').trim()
+
+        // Имя можно не передавать аргументом (например, старый npm не прокидывает аргументы) —
+        // тогда спрашиваем его интерактивно.
+        if (!resolvedName) {
+            resolvedName = (await this.ask('👤 Имя модератора: ')).trim()
+        }
+
+        const account = this.accounts.get(resolvedName.toLowerCase())
 
         if (!account) {
-            this.output.write(`❌ Модератор «${name}» не найден.\n`)
+            const configured = [...this.accounts.values()].map(item => item.name).join(', ') || '(нет)'
+            this.output.write(`❌ Модератор «${resolvedName}» не найден. Настроенные модераторы: ${configured}\n`)
+            this.close()
             return false
         }
 
         const password = await this.askSecret('🔑 Пароль модератора: ')
+        // Убираем возможные \r/\n, которые иногда проскакивают в не-TTY окружении (веб-консоль сервера)
+        const normalized = String(password ?? '').replace(/[\r\n]+$/, '')
 
-        if (!this.verifyPassword(password, account.password)) {
+        if (!this.verifyPassword(normalized, account.password)) {
             this.output.write('❌ Неверный пароль. Доступ запрещён.\n')
+            this.output.write('ℹ️  Пароль берётся из MODERATOR_ACCOUNTS. Переменные окружения имеют приоритет над .env.\n')
+            this.close()
             return false
         }
 
         this.output.write(`✅ Вход выполнен. Модератор: ${account.name}\n`)
         await this.menuLoop(account)
+        this.close()
         return true
     }
 
@@ -75,18 +99,16 @@ class ModerationConsole {
 
             if (choice === '0') {
                 this.output.write('👋 До свидания!\n')
-                this.rl.close()
                 return
+            }
+
+            if (choice === '1') {
+                await this.showUsersList(account)
+                continue
             }
 
             if (this.menuItems.has(choice)) {
                 const section = this.menuItems.get(choice)
-
-                if (choice === '1') {
-                    await this.showUsersList(account)
-                    continue
-                }
-
                 this.output.write(`\n📁 Раздел «${section}» — в разработке.\n\n`)
                 continue
             }
@@ -132,8 +154,8 @@ class ModerationConsole {
 
     // Сравнение паролей без утечки по времени
     verifyPassword(input, expected) {
-        const inputHash = crypto.createHash('sha256').update(String(input)).digest()
-        const expectedHash = crypto.createHash('sha256').update(String(expected)).digest()
+        const inputHash = crypto.createHash('sha256').update(String(input ?? '')).digest()
+        const expectedHash = crypto.createHash('sha256').update(String(expected ?? '')).digest()
         return crypto.timingSafeEqual(inputHash, expectedHash)
     }
 
@@ -155,23 +177,82 @@ class ModerationConsole {
         return `${day}.${month}.${year}`
     }
 
-    async showUsersList(account, page = 1) {
+    // Зачёркивание текста для забаненных пользователей
+    strike(text) {
+        return String(text).split('').map(char => char + '\u0336').join('')
+    }
+
+    isUserBanned(user) {
+        if (typeof user.isBannedNow === 'function') {
+            return user.isBannedNow()
+        }
+
+        return Boolean(user.banned)
+    }
+
+    async showUsersList(account) {
         if (!this.userRepository) {
             this.output.write('\n❌ Не подключён репозиторий пользователей (userRepository).\n\n')
             return
         }
 
-        const offset = (page - 1) * this.USERS_PER_PAGE
-        const allUsers = await this.userRepository.findAll({ orderByCreatedAtDesc: true })
-        const total = allUsers.length
-        const users = allUsers.slice(offset, offset + this.USERS_PER_PAGE)
-        const totalPages = Math.max(1, Math.ceil(total / this.USERS_PER_PAGE))
+        let page = 1
 
-        if (page > totalPages) {
-            await this.showUsersList(account, totalPages)
-            return
+        while (true) {
+            const allUsers = await this.userRepository.findAll({ orderByCreatedAtDesc: true })
+            const total = allUsers.length
+            const totalPages = Math.max(1, Math.ceil(total / this.USERS_PER_PAGE))
+
+            if (page > totalPages) {
+                page = totalPages
+            }
+
+            if (page < 1) {
+                page = 1
+            }
+
+            const offset = (page - 1) * this.USERS_PER_PAGE
+            const users = allUsers.slice(offset, offset + this.USERS_PER_PAGE)
+
+            this.renderUsersPage(account, page, totalPages, total, users, offset)
+
+            const input = (await this.ask('\nВведите команду: ')).trim()
+
+            if (input === '0') {
+                return
+            }
+
+            if (input === '<') {
+                if (page <= 1) {
+                    this.output.write('❌ Это первая страница.\n')
+                } else {
+                    page -= 1
+                }
+                continue
+            }
+
+            if (input === '>') {
+                if (page >= totalPages) {
+                    this.output.write('❌ Это последняя страница.\n')
+                } else {
+                    page += 1
+                }
+                continue
+            }
+
+            const parsed = this.parseAction(input)
+
+            if (!parsed) {
+                this.output.write('❌ Неверная команда. Используйте <, >, 0 или ban/varn/pardon <номер>.')
+                this.output.write('\n')
+                continue
+            }
+
+            await this.executeAction(account, allUsers, parsed)
         }
+    }
 
+    renderUsersPage(account, page, totalPages, total, users, offset) {
         const border = '='.repeat(40)
         this.output.write(`\n${border}\n`)
         this.output.write('=== IdeologyDatingBot | Users List ===\n')
@@ -181,49 +262,116 @@ class ModerationConsole {
 
         if (users.length === 0) {
             this.output.write('Список пользователей пуст.\n\n')
-            return
-        }
+        } else {
+            users.forEach((user, index) => {
+                const num = offset + index + 1
+                const chatID = user.chatID ?? '—'
+                const username = user.username ? `@${user.username}` : 'без username'
+                const created = this.formatDate(user.createdAt)
+                const content = `ID: ${chatID} | username: "${username}" | ${created}`
 
-        users.forEach((user, index) => {
-            const num = offset + index + 1
-            const chatID = user.chatID ?? '—'
-            const username = user.username ? `@${user.username}` : 'без username'
-            const created = this.formatDate(user.createdAt)
-            this.output.write(`[${num}] ID: ${chatID} | username: "${username}" | ${created}\n`)
-        })
+                if (this.isUserBanned(user)) {
+                    this.output.write(`[${num}] ${this.strike(content)}\n`)
+                } else {
+                    this.output.write(`[${num}] ${content}\n`)
+                }
+            })
+        }
 
         this.output.write('\nНавигация:\n')
-        this.output.write('<  — предыдущая страница | >  — следующая страница\n')
-        this.output.write('0  — вернуться в главное меню\n')
+        this.output.write('<  — предыдущая страница | >  — следующая страница | 0 — главное меню\n')
+        this.output.write('Действия:\n')
+        this.output.write('  ban <номер> [срок] ["причина"]      — забанить (срок: 60m, 24h, 30d, 1y)\n')
+        this.output.write('  varn <номер> ["причина"]            — предупреждение (3 → бан)\n')
+        this.output.write('  pardon <номер> ["комментарий"]      — разбанить\n')
+    }
 
-        const choice = (await this.ask('\nВведите команду: ')).trim()
+    // Разбирает команду вида: ban 1 24h "причина" | varn 1 "причина" | pardon 1 "комментарий"
+    parseAction(input) {
+        const match = String(input).trim().match(/^(ban|varn|warn|pardon)\s+(\d+)\s*(.*)$/i)
 
-        if (choice === '0') {
-            return
+        if (!match) {
+            return null
         }
 
-        if (choice === '<') {
-            if (page <= 1) {
-                this.output.write('❌ Это первая страница.\n\n')
-                await this.showUsersList(account, page)
-                return
+        let command = match[1].toLowerCase()
+
+        if (command === 'warn') {
+            command = 'varn'
+        }
+
+        const number = parseInt(match[2], 10)
+        let rest = match[3].trim()
+        let durationText = null
+
+        if (command === 'ban') {
+            const durationMatch = rest.match(/^(\d+[mhdy])(?:\s+|$)(.*)$/i)
+
+            if (durationMatch) {
+                durationText = durationMatch[1].toLowerCase()
+                rest = durationMatch[2].trim()
             }
-            await this.showUsersList(account, page - 1)
+        }
+
+        let reason = null
+
+        if (rest) {
+            const quoted = rest.match(/^"([\s\S]*)"$/)
+            reason = quoted ? quoted[1].trim() : rest
+        }
+
+        return { command, number, durationText, reason }
+    }
+
+    async executeAction(account, allUsers, parsed) {
+        const { command, number, durationText, reason } = parsed
+
+        if (!Number.isInteger(number) || number < 1 || number > allUsers.length) {
+            this.output.write(`❌ Нет пользователя с номером ${number}.\n`)
             return
         }
 
-        if (choice === '>') {
-            if (page >= totalPages) {
-                this.output.write('❌ Это последняя страница.\n\n')
-                await this.showUsersList(account, page)
-                return
+        if (!this.moderationActions) {
+            this.output.write('❌ Не подключён сервис модерации (moderationActions).\n')
+            return
+        }
+
+        const target = allUsers[number - 1]
+        const actor = { name: account.name, telegramID: account.telegramID }
+
+        if (command === 'ban') {
+            const result = await this.moderationActions.ban(target, { durationText, reason, actor })
+
+            if (result.ok) {
+                const until = result.human ? `на ${result.human}` : 'бессрочно'
+                this.output.write(`✅ Пользователь [${number}] (${target.chatID}) забанен ${until}.\n`)
+            } else {
+                this.output.write(`❌ ${result.error}\n`)
             }
-            await this.showUsersList(account, page + 1)
             return
         }
 
-        this.output.write('❌ Неверная команда. Используйте <, >, 0.\n\n')
-        await this.showUsersList(account, page)
+        if (command === 'varn') {
+            const result = await this.moderationActions.warn(target, { reason, actor })
+
+            if (result.ok) {
+                const tail = result.banned ? ' — достигнут лимит, пользователь забанен.' : '.'
+                this.output.write(`✅ Пользователь [${number}] получил предупреждение (${result.warnings}/3)${tail}\n`)
+            } else {
+                this.output.write(`❌ ${result.error}\n`)
+            }
+            return
+        }
+
+        if (command === 'pardon') {
+            const result = await this.moderationActions.pardon(target, { note: reason, actor })
+
+            if (result.ok) {
+                this.output.write(`✅ Пользователь [${number}] разбанен.\n`)
+            } else {
+                this.output.write(`❌ ${result.error}\n`)
+            }
+        }
     }
 }
 

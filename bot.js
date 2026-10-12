@@ -75,10 +75,13 @@ class Bot {
             this.cityService,
             this.reportService,
             this.moderatorChatIDs,
-            this.moderatorService
+            this.moderatorService,
+            null,
+            this.userRepository
         )
 
         this.saveInterval = null
+        this.moderationInterval = null
     }
 
     async loadUsers() {
@@ -103,12 +106,65 @@ class Bot {
         await this.userRepository.saveAll(this.users)
     }
 
+    // Подтягивает поля модерации из БД в память работающего бота, чтобы изменения
+    // из консольной панели (баны/варны) применялись без перезапуска.
+    // Заодно снимает истёкшие временные баны.
+    async syncModerationFromDb() {
+        if (typeof this.userRepository.getModerationStates !== 'function') {
+            return
+        }
+
+        const states = await this.userRepository.getModerationStates()
+        const now = Date.now()
+
+        for (const state of states) {
+            const user = this.users[state.chatID]
+
+            if (!user) {
+                continue
+            }
+
+            const expired = state.banned &&
+                state.bannedUntil &&
+                state.bannedUntil.getTime() <= now
+
+            if (expired) {
+                user.banned = false
+                user.bannedUntil = null
+                user.warnings = state.warnings
+
+                await this.userRepository.setModerationState(state.chatID, {
+                    banned: false,
+                    warnings: state.warnings,
+                    bannedUntil: null
+                }).catch(error => {
+                    console.error('Ошибка снятия истёкшего бана:', error.message)
+                })
+
+                console.log(`[Модерация] срок бана истёк: ${state.chatID}`)
+                continue
+            }
+
+            user.banned = state.banned
+            user.warnings = state.warnings
+            user.bannedUntil = state.bannedUntil
+        }
+    }
+
     startAutoSave() {
         this.saveInterval = setInterval(() => {
             this.saveAllUsers().catch(error => {
                 console.error('Ошибка сохранения анкет:', error)
             })
         }, 5000)
+
+        // Модерацию синхронизируем чаще (2с), чтобы баны/варны из консоли
+        // применялись к работающему боту почти сразу.
+        this.moderationInterval = setInterval(() => {
+            this.syncModerationFromDb().catch(error => {
+                console.error('Ошибка синхронизации модерации:', error)
+            })
+        }, 2000)
     }
 
     registerCommands() {

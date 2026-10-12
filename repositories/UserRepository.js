@@ -43,6 +43,7 @@ class UserRepository {
                 isGlobal: Boolean(row.is_global),
                 hidden: Boolean(row.hidden),
                 banned: Boolean(row.banned),
+                bannedUntil: row.banned_until ? new Date(row.banned_until) : null,
                 warnings: Number(row.warnings) || 0,
                 photos: row.photos || [],
                 likes: row.likes || [],
@@ -81,6 +82,7 @@ class UserRepository {
                 is_global,
                 hidden,
                 banned,
+                banned_until,
                 warnings,
                 photos,
                 likes,
@@ -91,7 +93,7 @@ class UserRepository {
             )
             VALUES (
                 $1, $2, $3, $4, $5, $6, $7,
-                $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+                $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
             )
             ON CONFLICT (chat_id) DO UPDATE SET
                 username = EXCLUDED.username,
@@ -103,8 +105,6 @@ class UserRepository {
                 city = EXCLUDED.city,
                 is_global = EXCLUDED.is_global,
                 hidden = EXCLUDED.hidden,
-                banned = EXCLUDED.banned,
-                warnings = EXCLUDED.warnings,
                 photos = EXCLUDED.photos,
                 likes = EXCLUDED.likes,
                 liked_by = EXCLUDED.liked_by,
@@ -123,6 +123,7 @@ class UserRepository {
             user.isGlobal ? true : false,
             user.hidden ? true : false,
             user.banned ? true : false,
+            user.bannedUntil || null,
             user.warnings || 0,
             JSON.stringify(user.photos || []),
             JSON.stringify(user.likes || []),
@@ -131,6 +132,35 @@ class UserRepository {
             JSON.stringify(user.matches || []),
             state
         ])
+    }
+
+    // Обновляет только поля модерации. Используется консолью и Telegram-модерацией,
+    // чтобы автосохранение анкет не перезатирало баны/варны устаревшим состоянием из памяти.
+    async setModerationState(chatID, { banned, warnings, bannedUntil }) {
+        await this.db.query(`
+            UPDATE users
+            SET banned = $2, warnings = $3, banned_until = $4
+            WHERE chat_id = $1
+        `, [
+            String(chatID),
+            banned ? true : false,
+            Number(warnings) || 0,
+            bannedUntil || null
+        ])
+    }
+
+    // Возвращает состояние модерации всех пользователей (для синхронизации с работающим ботом).
+    async getModerationStates() {
+        const result = await this.db.query(
+            'SELECT chat_id, banned, warnings, banned_until FROM users'
+        )
+
+        return result.rows.map(row => ({
+            chatID: Number(row.chat_id),
+            banned: Boolean(row.banned),
+            warnings: Number(row.warnings) || 0,
+            bannedUntil: row.banned_until ? new Date(row.banned_until) : null
+        }))
     }
 
     async saveAll(users) {

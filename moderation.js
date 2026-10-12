@@ -1,9 +1,13 @@
 const path = require('path')
 require('dotenv').config({ quiet: true, path: path.resolve(__dirname, '.env') })
 
+const TelegramApi = require('node-telegram-bot-api')
+
 const ModerationConsole = require('./cli/ModerationConsole')
+const ModerationActionsService = require('./services/ModerationActionsService')
 const User = require('./models/user')
 const UserRepository = require('./repositories/UserRepository')
+const ModerationActionRepository = require('./repositories/ModerationActionRepository')
 const { db, initDatabase } = require('./database')
 
 // Формат: MODERATOR_ACCOUNTS=имя:пароль:telegramID, имя2:пароль2:telegramID
@@ -37,13 +41,25 @@ function parseAccounts(envValue) {
         .filter(Boolean)
 }
 
-async function main() {
-    const name = (process.argv[2] || '').trim()
-
-    if (!name) {
-        console.error('❌ Укажите имя модератора, например:\n   npm run moderation daniiar')
-        process.exit(1)
+// Отправка уведомлений пользователям из консоли. Поллинг отключён,
+// чтобы не конфликтовать с основным процессом бота (ошибка 409 Conflict).
+function createNotifier() {
+    if (!process.env.BOT_TOKEN) {
+        return null
     }
+
+    try {
+        return new TelegramApi(process.env.BOT_TOKEN, { polling: false })
+    } catch (error) {
+        console.error('⚠️  Не удалось создать Telegram-клиент для уведомлений:', error.message)
+        return null
+    }
+}
+
+async function main() {
+    // Имя модератора можно передать аргументом (npm run moderation daniiar)
+    // или ввести интерактивно, если аргумент не пробросился.
+    const name = (process.argv[2] || '').trim()
 
     const accounts = parseAccounts(process.env.MODERATOR_ACCOUNTS)
 
@@ -52,25 +68,34 @@ async function main() {
         process.exit(1)
     }
 
+    await initDatabase()
+
+    const userRepository = new UserRepository(db, User)
+    const moderationActionRepository = new ModerationActionRepository(db)
+    const moderationActions = new ModerationActionsService({
+        userRepository,
+        bot: createNotifier(),
+        moderationActionRepository
+    })
+
     const cli = new ModerationConsole({
         input: process.stdin,
         output: process.stdout,
-        accounts
-    })
-
-    await initDatabase()
-    const userRepository = new UserRepository(db, User)
-
-    const cliWithRepo = new ModerationConsole({
-        input: process.stdin,
-        output: process.stdout,
         accounts,
-        userRepository
+        userRepository,
+        moderationActions
     })
 
-    const ok = await cliWithRepo.start(name)
-    await db.end().catch(() => {})
-    process.exit(ok ? 0 : 1)
+    let ok = false
+
+    try {
+        ok = await cli.start(name)
+    } finally {
+        cli.close()
+        await db.end().catch(() => {})
+    }
+
+    process.exitCode = ok ? 0 : 1
 }
 
 if (require.main === module) {
