@@ -4,7 +4,7 @@ const crypto = require('crypto')
 // Консольная панель модерации: вход по имени модератора и его личному паролю,
 // далее — локальное меню. Действия модерации выполняются через ModerationActionsService.
 class ModerationConsole {
-    constructor({ input, output, accounts = [], userRepository = null, moderationActions = null }) {
+    constructor({ input, output, accounts = [], autoLogin = false, userRepository = null, moderationActions = null }) {
         this.input = input
         this.output = output
         // Имена модераторов сравниваем без учёта регистра
@@ -14,6 +14,7 @@ class ModerationConsole {
                 { name, password, telegramID }
             ])
         )
+        this.autoLogin = autoLogin
         this.userRepository = userRepository
         this.moderationActions = moderationActions
         this.muted = false
@@ -58,6 +59,19 @@ class ModerationConsole {
     async start(name) {
         let resolvedName = String(name || '').trim()
 
+        // Если модератор задан через MODERATOR_NAME/MODERATOR_PIN, пароль уже известен
+        // из окружения — входим без интерактивного ввода (удобно для веб-консоли хостинга).
+        if (this.autoLogin && this.accounts.size === 1) {
+            const account = [...this.accounts.values()][0]
+
+            if (!resolvedName || resolvedName.toLowerCase() === account.name.toLowerCase()) {
+                this.output.write(`✅ Вход выполнен. Модератор: ${account.name}\n`)
+                await this.menuLoop(account)
+                this.close()
+                return true
+            }
+        }
+
         // Имя можно не передавать аргументом (например, старый npm не прокидывает аргументы) —
         // тогда спрашиваем его интерактивно.
         if (!resolvedName) {
@@ -79,7 +93,7 @@ class ModerationConsole {
 
         if (!this.verifyPassword(normalized, account.password)) {
             this.output.write('❌ Неверный пароль. Доступ запрещён.\n')
-            this.output.write('ℹ️  Пароль берётся из MODERATOR_ACCOUNTS. Переменные окружения имеют приоритет над .env.\n')
+            this.output.write('ℹ️  Пароль берётся из MODERATOR_ACCOUNTS (или MODERATOR_PIN). Переменные окружения имеют приоритет над .env.\n')
             this.close()
             return false
         }
