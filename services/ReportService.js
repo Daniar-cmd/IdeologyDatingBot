@@ -70,7 +70,8 @@ class ReportService {
         return this.reportRepository.findById(id)
     }
 
-    async setStatus(reportID, status) {
+    // Меняет статус жалобы. Опционально сохраняет автора приговора и наказание.
+    async setStatus(reportID, status, { resolvedBy = null, resolvedAction = null } = {}) {
         if (!['new', 'processed', 'dismissed'].includes(status)) {
             return { success: false }
         }
@@ -80,13 +81,26 @@ class ReportService {
             return { success: false }
         }
 
-        const report = await this.reportRepository.setStatus(id, status)
+        const report = await this.reportRepository.setStatus(id, status, {
+            resolvedBy,
+            resolvedAction
+        })
 
         if (!report) {
             return { success: false }
         }
 
         return { success: true, report }
+    }
+
+    // Страница жалоб для консольной админ-панели (новые сверху).
+    async getReportsPage(limit, offset) {
+        return this.reportRepository.findAllWithUsers({ limit, offset })
+    }
+
+    // Общее число жалоб для расчёта страниц.
+    async getReportsCount() {
+        return this.reportRepository.countAll()
     }
 }
 

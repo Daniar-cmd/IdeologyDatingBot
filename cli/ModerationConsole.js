@@ -4,7 +4,7 @@ const crypto = require('crypto')
 // Консольная админ-панель: вход по имени администратора и его личному паролю,
 // далее — локальное меню. Действия выполняются через ModerationActionsService.
 class ModerationConsole {
-    constructor({ input, output, accounts = [], userRepository = null, moderationActions = null }) {
+    constructor({ input, output, accounts = [], userRepository = null, moderationActions = null, reportService = null }) {
         this.input = input
         this.output = output
         // Имена администраторов сравниваем без учёта регистра
@@ -16,6 +16,7 @@ class ModerationConsole {
         )
         this.userRepository = userRepository
         this.moderationActions = moderationActions
+        this.reportService = reportService
         this.muted = false
 
         this.rl = readline.createInterface({
@@ -46,6 +47,7 @@ class ModerationConsole {
         ])
 
         this.USERS_PER_PAGE = 50
+        this.REPORTS_PER_PAGE = 50
     }
 
     close() {
@@ -104,6 +106,11 @@ class ModerationConsole {
 
             if (choice === '1') {
                 await this.showUsersList(account)
+                continue
+            }
+
+            if (choice === '2') {
+                await this.showReportsList(account)
                 continue
             }
 
@@ -279,6 +286,148 @@ class ModerationConsole {
 
         this.output.write('\nНавигация:\n')
         this.output.write('<  — предыдущая страница | >  — следующая страница | 0 — главное меню\n')
+    }
+
+    async showReportsList(account) {
+        if (!this.reportService) {
+            this.output.write('\n❌ Не подключён сервис репортов (reportService).\n\n')
+            return
+        }
+
+        let page = 1
+
+        while (true) {
+            const total = await this.reportService.getReportsCount()
+            const totalPages = Math.max(1, Math.ceil(total / this.REPORTS_PER_PAGE))
+
+            if (page > totalPages) {
+                page = totalPages
+            }
+
+            if (page < 1) {
+                page = 1
+            }
+
+            const offset = (page - 1) * this.REPORTS_PER_PAGE
+            const reports = await this.reportService.getReportsPage(this.REPORTS_PER_PAGE, offset)
+
+            this.renderReportsPage(account, page, totalPages, total, reports)
+
+            const input = (await this.ask('\nВведите команду: ')).trim()
+
+            if (input === '0') {
+                return
+            }
+
+            if (input === '<') {
+                if (page <= 1) {
+                    this.output.write('❌ Это первая страница.\n')
+                } else {
+                    page -= 1
+                }
+                continue
+            }
+
+            if (input === '>') {
+                if (page >= totalPages) {
+                    this.output.write('❌ Это последняя страница.\n')
+                } else {
+                    page += 1
+                }
+                continue
+            }
+
+            this.output.write('❌ Неверная команда.\n')
+        }
+    }
+
+    renderReportsPage(account, page, totalPages, total, reports) {
+        const border = '='.repeat(40)
+        this.output.write(`\n${border}\n`)
+        this.output.write('=== IdeologyDatingBot | Reports ===\n')
+        this.output.write(`${border}\n`)
+        this.output.write(`Админ: ${account.name}\n`)
+        this.output.write(`Страница: ${page}/${totalPages} | Всего: ${total}\n\n`)
+
+        if (reports.length === 0) {
+            this.output.write('Список репортов пуст.\n\n')
+        } else {
+            reports.forEach(report => {
+                const reporter = this.describeParty(report.reporter_username, report.reporter_chat_id)
+                const reported = this.describeParty(report.reported_username, report.reported_chat_id)
+                const created = this.formatDateTime(report.created_at)
+                const reason = this.truncateText(report.reason || '—', 80)
+                const status = report.status === 'new' ? 'waiting' : 'complete'
+
+                let line = `#${report.id} | от: ${reporter} | на: ${reported} | ${created} | ${reason} | ${status}`
+
+                if (status === 'complete') {
+                    const admin = report.resolved_by || '—'
+                    const punishment = this.punishmentLabel(report.resolved_action)
+                    line += ` | админ: ${admin} | наказание: ${punishment}`
+                }
+
+                this.output.write(`${line}\n`)
+            })
+        }
+
+        this.output.write('\nНавигация:\n')
+        this.output.write('<  — предыдущая страница | >  — следующая страница | 0 — главное меню\n')
+    }
+
+    // «@username (chat_id)» либо «без username (chat_id)».
+    describeParty(username, chatID) {
+        const id = chatID ?? '—'
+        return username ? `@${username} (${id})` : `без username (${id})`
+    }
+
+    // Наказание по коду действия из reports.resolved_action.
+    punishmentLabel(action) {
+        if (action === 'ban') {
+            return 'бан'
+        }
+
+        if (action === 'warn') {
+            return 'предупреждение'
+        }
+
+        if (action === 'dismiss') {
+            return 'отклонена'
+        }
+
+        return '—'
+    }
+
+    // Дата и время: DD.MM.YYYY HH:MM.
+    formatDateTime(date) {
+        if (!date) {
+            return '—'
+        }
+
+        const d = new Date(date)
+
+        if (Number.isNaN(d.getTime())) {
+            return '—'
+        }
+
+        const day = String(d.getDate()).padStart(2, '0')
+        const month = String(d.getMonth() + 1).padStart(2, '0')
+        const year = d.getFullYear()
+        const hours = String(d.getHours()).padStart(2, '0')
+        const minutes = String(d.getMinutes()).padStart(2, '0')
+
+        return `${day}.${month}.${year} ${hours}:${minutes}`
+    }
+
+    // Обрезает длинный текст до maxLength символов (с многоточием).
+    truncateText(text, maxLength) {
+        const value = String(text)
+
+        if (value.length <= maxLength) {
+            return value
+        }
+
+        return `${value.slice(0, maxLength - 1)}…`
     }
 
     // Разбирает команду вида: ban 1 24h "причина" | warn 1 "причина" | pardon 1 "комментарий"

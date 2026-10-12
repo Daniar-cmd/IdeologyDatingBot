@@ -334,7 +334,10 @@ ${user.description || ''}`;
             targetUser.applyBan();
             targetUser.bannedUntil = null;
             await this.persistModeration(targetUser);
-            await this.reportService.setStatus(report.id, 'processed');
+            await this.reportService.setStatus(report.id, 'processed', {
+                resolvedBy: state.moderatorName,
+                resolvedAction: 'ban'
+            });
 
             await this.bot.sendMessage(
                 targetChatID,
@@ -345,7 +348,10 @@ ${user.description || ''}`;
         } else if (state.action === 'warn') {
             const result = targetUser.applyWarning();
             await this.persistModeration(targetUser);
-            await this.reportService.setStatus(report.id, 'processed');
+            await this.reportService.setStatus(report.id, 'processed', {
+                resolvedBy: state.moderatorName,
+                resolvedAction: 'warn'
+            });
 
             await this.bot.sendMessage(
                 targetChatID,
@@ -362,7 +368,10 @@ ${user.description || ''}`;
                 await this.bot.sendMessage(chatID, `✅ Решение применено: предупреждение ${result.warnings}/3.`);
             }
         } else if (state.action === 'dismiss') {
-            await this.reportService.setStatus(report.id, 'dismissed');
+            await this.reportService.setStatus(report.id, 'dismissed', {
+                resolvedBy: state.moderatorName,
+                resolvedAction: 'dismiss'
+            });
             await this.bot.sendMessage(chatID, '✅ Жалоба отклонена как ложное срабатывание.');
         } else {
             this.endModeration(chatID);
@@ -1182,6 +1191,8 @@ ${user.description || ''}
                         return;
                     }
 
+                    const from = query.from || {};
+
                     this.moderationStates[chatID] = {
                         step: 'pin1',
                         reportID: report.id,
@@ -1189,7 +1200,9 @@ ${user.description || ''}
                         reason: null,
                         attempts: 0,
                         deadline: null,
-                        timer: null
+                        timer: null,
+                        // Кто разбирает жалобу — попадёт в reports.resolved_by
+                        moderatorName: from.username ? `@${from.username}` : (from.first_name || String(chatID))
                     };
 
                     await this.bot.editMessageReplyMarkup(

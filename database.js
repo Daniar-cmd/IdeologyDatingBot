@@ -62,7 +62,9 @@ async function initDatabase() {
                 reason TEXT NOT NULL,
                 status TEXT DEFAULT 'new',
                 created_at TIMESTAMPTZ DEFAULT NOW(),
-                processed_at TIMESTAMPTZ
+                processed_at TIMESTAMPTZ,
+                resolved_by TEXT,
+                resolved_action TEXT
             )
         `)
 
@@ -70,7 +72,9 @@ async function initDatabase() {
         await db.query(`
             ALTER TABLE reports
             ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'new',
-            ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ
+            ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ,
+            ADD COLUMN IF NOT EXISTS resolved_by TEXT,
+            ADD COLUMN IF NOT EXISTS resolved_action TEXT
         `)
 
         // Заморозка модераторов за неверные admin-ключи

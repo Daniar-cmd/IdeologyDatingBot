@@ -5,9 +5,11 @@ const TelegramApi = require('node-telegram-bot-api')
 
 const ModerationConsole = require('./cli/ModerationConsole')
 const ModerationActionsService = require('./services/ModerationActionsService')
+const ReportService = require('./services/ReportService')
 const User = require('./models/user')
 const UserRepository = require('./repositories/UserRepository')
 const ModerationActionRepository = require('./repositories/ModerationActionRepository')
+const ReportRepository = require('./repositories/ReportRepository')
 const { db, initDatabase } = require('./database')
 
 // Формат: MODERATOR_ACCOUNTS=имя:пароль:telegramID, имя2:пароль2:telegramID
@@ -120,6 +122,8 @@ async function main() {
 
     const userRepository = new UserRepository(db, User)
     const moderationActionRepository = new ModerationActionRepository(db)
+    const reportRepository = new ReportRepository(db)
+    const reportService = new ReportService(reportRepository)
     const moderationActions = new ModerationActionsService({
         userRepository,
         bot: createNotifier(),
@@ -131,7 +135,8 @@ async function main() {
         output: process.stdout,
         accounts,
         userRepository,
-        moderationActions
+        moderationActions,
+        reportService
     })
 
     let ok = false
