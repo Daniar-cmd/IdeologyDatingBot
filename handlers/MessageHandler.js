@@ -333,6 +333,9 @@ ${user.description || ''}`;
         if (state.action === 'ban') {
             targetUser.applyBan();
             targetUser.bannedUntil = null;
+            targetUser.bannedAt = new Date();
+            targetUser.bannedBy = state.moderatorName || null;
+            targetUser.banReason = state.reason || null;
             await this.persistModeration(targetUser);
             await this.reportService.setStatus(report.id, 'processed', {
                 resolvedBy: state.moderatorName,
@@ -348,6 +351,14 @@ ${user.description || ''}`;
             await this.bot.sendMessage(chatID, '✅ Решение применено: пользователь забанен.');
         } else if (state.action === 'warn') {
             const result = targetUser.applyWarning();
+
+            if (targetUser.banned) {
+                targetUser.bannedUntil = null;
+                targetUser.bannedAt = targetUser.bannedAt || new Date();
+                targetUser.bannedBy = targetUser.bannedBy || state.moderatorName || null;
+                targetUser.banReason = targetUser.banReason || state.reason || null;
+            }
+
             await this.persistModeration(targetUser);
             await this.reportService.setStatus(report.id, 'processed', {
                 resolvedBy: state.moderatorName,
@@ -394,7 +405,10 @@ ${user.description || ''}`;
         await this.userRepository.setModerationState(user.chatID, {
             banned: user.banned,
             warnings: user.warnings,
-            bannedUntil: user.bannedUntil || null
+            bannedUntil: user.bannedUntil || null,
+            bannedAt: user.bannedAt || null,
+            bannedBy: user.bannedBy || null,
+            banReason: user.banReason || null
         }).catch(error => {
             console.error('Ошибка сохранения состояния модерации:', error.message);
         });

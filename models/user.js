@@ -17,6 +17,9 @@ class User {
         hidden = false,
         banned = false,
         bannedUntil = null,
+        bannedAt = null,
+        bannedBy = null,
+        banReason = null,
         warnings = 0,
         createdAt = null
     }) {
@@ -32,6 +35,9 @@ class User {
         this.hidden = Boolean(hidden)
         this.banned = Boolean(banned)
         this.bannedUntil = bannedUntil ? new Date(bannedUntil) : null
+        this.bannedAt = bannedAt ? new Date(bannedAt) : null
+        this.bannedBy = bannedBy || null
+        this.banReason = banReason || null
         this.warnings = Number(warnings) || 0
         this.createdAt = createdAt ? new Date(createdAt) : null
 

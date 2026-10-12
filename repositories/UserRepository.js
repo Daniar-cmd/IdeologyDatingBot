@@ -44,6 +44,9 @@ class UserRepository {
                 hidden: Boolean(row.hidden),
                 banned: Boolean(row.banned),
                 bannedUntil: row.banned_until ? new Date(row.banned_until) : null,
+                bannedAt: row.banned_at ? new Date(row.banned_at) : null,
+                bannedBy: row.banned_by || null,
+                banReason: row.ban_reason || null,
                 warnings: Number(row.warnings) || 0,
                 photos: row.photos || [],
                 likes: row.likes || [],
@@ -136,16 +139,26 @@ class UserRepository {
 
     // Обновляет только поля модерации. Используется консолью и Telegram-модерацией,
     // чтобы автосохранение анкет не перезатирало баны/варны устаревшим состоянием из памяти.
-    async setModerationState(chatID, { banned, warnings, bannedUntil }) {
+    // Метаданные бана (banned_at/banned_by/ban_reason) пишутся через COALESCE:
+    // если значение не передано (null), уже сохранённое не затирается.
+    async setModerationState(chatID, { banned, warnings, bannedUntil, bannedAt = null, bannedBy = null, banReason = null }) {
         await this.db.query(`
             UPDATE users
-            SET banned = $2, warnings = $3, banned_until = $4
+            SET banned = $2,
+                warnings = $3,
+                banned_until = $4,
+                banned_at = COALESCE($5, banned_at),
+                banned_by = COALESCE($6, banned_by),
+                ban_reason = COALESCE($7, ban_reason)
             WHERE chat_id = $1
         `, [
             String(chatID),
             banned ? true : false,
             Number(warnings) || 0,
-            bannedUntil || null
+            bannedUntil || null,
+            bannedAt || null,
+            bannedBy || null,
+            banReason || null
         ])
     }
 

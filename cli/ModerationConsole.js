@@ -50,6 +50,7 @@ class ModerationConsole {
 
         this.USERS_PER_PAGE = 50
         this.REPORTS_PER_PAGE = 50
+        this.BANNED_PER_PAGE = 50
     }
 
     close() {
@@ -113,6 +114,11 @@ class ModerationConsole {
 
             if (choice === '2') {
                 await this.showReportsList(account)
+                continue
+            }
+
+            if (choice === '3') {
+                await this.showBannedList(account)
                 continue
             }
 
@@ -521,6 +527,244 @@ class ModerationConsole {
         }
 
         this.output.write(`✅ Репорт #${report.id} отправлен. Доставлено: ${sent}${failed ? `, ошибок: ${failed}` : ''}.\n`)
+    }
+
+    // ---------------- Вкладка «3. Заблокированные пользователи» ----------------
+
+    // Активные (по сроку) забаненные пользователи, свежие баны сверху.
+    async loadBannedUsers() {
+        const all = await this.userRepository.findAll()
+        const banned = all.filter(user =>
+            typeof user.isBannedNow === 'function' ? user.isBannedNow() : Boolean(user.banned)
+        )
+
+        banned.sort((a, b) => {
+            const at = a.bannedAt ? a.bannedAt.getTime() : 0
+            const bt = b.bannedAt ? b.bannedAt.getTime() : 0
+
+            if (bt !== at) {
+                return bt - at
+            }
+
+            return Number(a.chatID) - Number(b.chatID)
+        })
+
+        return banned
+    }
+
+    async showBannedList(account) {
+        if (!this.userRepository) {
+            this.output.write('\n❌ Не подключён репозиторий пользователей (userRepository).\n\n')
+            return
+        }
+
+        let page = 1
+
+        while (true) {
+            const banned = await this.loadBannedUsers()
+            const total = banned.length
+            const totalPages = Math.max(1, Math.ceil(total / this.BANNED_PER_PAGE))
+
+            if (page > totalPages) {
+                page = totalPages
+            }
+
+            if (page < 1) {
+                page = 1
+            }
+
+            const offset = (page - 1) * this.BANNED_PER_PAGE
+            const pageItems = banned.slice(offset, offset + this.BANNED_PER_PAGE)
+
+            this.renderBannedPage(account, page, totalPages, total, pageItems, offset)
+
+            const input = (await this.ask('\nВведите команду: ')).trim()
+
+            if (input === '0') {
+                return
+            }
+
+            if (input === '<') {
+                if (page <= 1) {
+                    this.output.write('❌ Это первая страница.\n')
+                } else {
+                    page -= 1
+                }
+                continue
+            }
+
+            if (input === '>') {
+                if (page >= totalPages) {
+                    this.output.write('❌ Это последняя страница.\n')
+                } else {
+                    page += 1
+                }
+                continue
+            }
+
+            const parsed = this.parseBannedAction(input)
+
+            if (!parsed) {
+                this.output.write('❌ Неверная команда.\n')
+                continue
+            }
+
+            const target = banned[parsed.number - 1]
+
+            if (!target) {
+                this.output.write('❌ Нет пользователя с таким номером.\n')
+                continue
+            }
+
+            if (parsed.command === 'read') {
+                await this.showBanCard(target)
+                continue
+            }
+
+            if (!this.moderationActions) {
+                this.output.write('❌ Не подключён сервис модерации (moderationActions).\n')
+                continue
+            }
+
+            await this.executeBannedAction(account, target, parsed)
+        }
+    }
+
+    renderBannedPage(account, page, totalPages, total, users, offset) {
+        const border = '='.repeat(40)
+        this.output.write(`\n${border}\n`)
+        this.output.write('=== IdeologyDatingBot | Banned ===\n')
+        this.output.write(`${border}\n`)
+        this.output.write(`Админ: ${account.name}\n`)
+        this.output.write(`Страница: ${page}/${totalPages} | Всего: ${total}\n\n`)
+
+        if (users.length === 0) {
+            this.output.write('Нет заблокированных пользователей.\n\n')
+        } else {
+            users.forEach((user, index) => {
+                const num = offset + index + 1
+                const id = user.chatID ?? '—'
+                const username = user.username ? `@${user.username}` : 'без username'
+                const bannedAt = this.formatDateTime(user.bannedAt)
+                const by = user.bannedBy || '—'
+                const until = user.bannedUntil
+                    ? `до ${this.formatDateTime(user.bannedUntil)}`
+                    : 'бессрочно'
+
+                this.output.write(`[${num}] ${id} | ${username} | ${bannedAt} | ${by} | ${until}\n`)
+            })
+        }
+
+        this.output.write('\nНавигация:\n')
+        this.output.write('<  — предыдущая страница | >  — следующая страница | 0 — главное меню\n')
+    }
+
+    // Команда read — карточка блокировки с причиной. Выход — 0.
+    async showBanCard(target) {
+        while (true) {
+            this.renderBanDetails(target)
+            this.output.write('0 — назад к списку забаненных\n')
+
+            const input = (await this.ask('\nВведите команду: ')).trim()
+
+            if (input === '0') {
+                return
+            }
+
+            this.output.write('❌ Неверная команда. Доступно: 0 — назад.\n')
+        }
+    }
+
+    renderBanDetails(user) {
+        const border = '='.repeat(40)
+        const username = user.username ? `@${user.username}` : 'без username'
+        const until = user.bannedUntil
+            ? `до ${this.formatDateTime(user.bannedUntil)}`
+            : 'бессрочно'
+
+        this.output.write(`\n${border}\n`)
+        this.output.write(`=== Блокировка: ${user.chatID} ===\n`)
+        this.output.write(`${border}\n`)
+        this.output.write(`Telegram ID: ${user.chatID}\n`)
+        this.output.write(`username: ${username}\n`)
+        this.output.write(`Дата блокировки: ${this.formatDateTime(user.bannedAt)}\n`)
+        this.output.write(`Кто заблокировал: ${user.bannedBy || '—'}\n`)
+        this.output.write(`Срок: ${until}\n`)
+        this.output.write(`Причина: ${user.banReason || '—'}\n`)
+        this.output.write('\n')
+    }
+
+    // Разбирает команды вкладки банов: read 1 | pardon 1 ["комментарий"] |
+    // permanent 1 | add 1 30d.
+    parseBannedAction(input) {
+        const text = String(input).trim()
+
+        const read = text.match(/^read\s+(\d+)$/i)
+
+        if (read) {
+            return { command: 'read', number: parseInt(read[1], 10) }
+        }
+
+        const permanent = text.match(/^permanent\s+(\d+)$/i)
+
+        if (permanent) {
+            return { command: 'permanent', number: parseInt(permanent[1], 10) }
+        }
+
+        const add = text.match(/^add\s+(\d+)\s+(\d+[mhdy])$/i)
+
+        if (add) {
+            return { command: 'add', number: parseInt(add[1], 10), durationText: add[2].toLowerCase() }
+        }
+
+        const pardon = text.match(/^pardon\s+(\d+)\s*(.*)$/i)
+
+        if (pardon) {
+            let note = pardon[2].trim()
+            const quoted = note.match(/^"([\s\S]*)"$/)
+
+            if (quoted) {
+                note = quoted[1]
+            }
+
+            return { command: 'pardon', number: parseInt(pardon[1], 10), note: note || null }
+        }
+
+        return null
+    }
+
+    async executeBannedAction(account, target, parsed) {
+        const actor = { name: account.name, telegramID: account.telegramID }
+        const label = target.chatID
+
+        if (parsed.command === 'pardon') {
+            const result = await this.moderationActions.pardon(target, { note: parsed.note, actor })
+
+            this.output.write(result.ok
+                ? `✅ Пользователь ${label} разбанен.\n`
+                : `❌ ${result.error}\n`)
+            return
+        }
+
+        if (parsed.command === 'permanent') {
+            const result = await this.moderationActions.permanent(target, { actor })
+
+            this.output.write(result.ok
+                ? `✅ Пользователь ${label} забанен бессрочно.\n`
+                : `❌ ${result.error}\n`)
+            return
+        }
+
+        if (parsed.command === 'add') {
+            const result = await this.moderationActions.extend(target, { durationText: parsed.durationText, actor })
+
+            if (result.ok) {
+                this.output.write(`✅ Пользователь ${label}: срок продлён на ${result.human}.\n`)
+                this.output.write(`Новая дата окончания: ${this.formatDateTime(result.bannedUntil)}\n`)
+            } else {
+                this.output.write(`❌ ${result.error}\n`)
+            }
+        }
     }
 
     // «@username (chat_id)» либо «без username (chat_id)».

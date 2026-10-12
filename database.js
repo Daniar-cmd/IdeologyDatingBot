@@ -30,6 +30,9 @@ async function initDatabase() {
                 hidden BOOLEAN DEFAULT FALSE,
                 banned BOOLEAN DEFAULT FALSE,
                 banned_until TIMESTAMPTZ,
+                banned_at TIMESTAMPTZ,
+                banned_by TEXT,
+                ban_reason TEXT,
                 warnings INTEGER DEFAULT 0,
                 photos JSONB DEFAULT '[]'::jsonb,
                 likes JSONB DEFAULT '[]'::jsonb,
@@ -49,6 +52,9 @@ async function initDatabase() {
             ADD COLUMN IF NOT EXISTS hidden BOOLEAN DEFAULT FALSE,
             ADD COLUMN IF NOT EXISTS banned BOOLEAN DEFAULT FALSE,
             ADD COLUMN IF NOT EXISTS banned_until TIMESTAMPTZ,
+            ADD COLUMN IF NOT EXISTS banned_at TIMESTAMPTZ,
+            ADD COLUMN IF NOT EXISTS banned_by TEXT,
+            ADD COLUMN IF NOT EXISTS ban_reason TEXT,
             ADD COLUMN IF NOT EXISTS warnings INTEGER DEFAULT 0,
             ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()
         `)

@@ -50,12 +50,32 @@ class ModerationActionsService {
         return users.find(u => Number(u.chatID) === Number(chatID))
     }
 
+    // Отображаемое имя того, кто выполнил действие (@username / имя / id).
+    actorLabel(actor) {
+        if (!actor) {
+            return null
+        }
+
+        if (actor.name) {
+            return String(actor.name)
+        }
+
+        if (actor.telegramID) {
+            return String(actor.telegramID)
+        }
+
+        return null
+    }
+
     async persist(target) {
         if (target && typeof this.userRepository.setModerationState === 'function') {
             await this.userRepository.setModerationState(target.chatID, {
                 banned: target.banned,
                 warnings: target.warnings,
-                bannedUntil: target.bannedUntil || null
+                bannedUntil: target.bannedUntil || null,
+                bannedAt: target.bannedAt || null,
+                bannedBy: target.bannedBy || null,
+                banReason: target.banReason || null
             })
         }
     }
@@ -104,6 +124,9 @@ class ModerationActionsService {
 
         target.applyBan()
         target.bannedUntil = bannedUntil
+        target.bannedAt = new Date()
+        target.bannedBy = this.actorLabel(actor)
+        target.banReason = reason || null
         await this.persist(target)
 
         const suffix = human ? ` на ${human}` : ''
@@ -121,6 +144,13 @@ class ModerationActionsService {
         }
 
         const result = target.applyWarning()
+
+        if (target.banned) {
+            target.bannedAt = target.bannedAt || new Date()
+            target.bannedBy = target.bannedBy || this.actorLabel(actor)
+            target.banReason = target.banReason || reason || null
+        }
+
         await this.persist(target)
 
         const reasonText = reason ? `\n\nПричина: ${reason}` : ''
@@ -149,6 +179,60 @@ class ModerationActionsService {
         await this.log('pardon', actor, target, { note })
 
         return { ok: true }
+    }
+
+    // Перевод временного бана в бессрочный.
+    async permanent(target, { actor = null } = {}) {
+        if (!target) {
+            return { ok: false, error: 'Пользователь не найден.' }
+        }
+
+        if (typeof target.isBannedNow === 'function' && !target.isBannedNow()) {
+            return { ok: false, error: 'Пользователь не забанен.' }
+        }
+
+        if (!target.bannedUntil) {
+            return { ok: false, error: 'Пользователь уже забанен бессрочно.' }
+        }
+
+        target.banned = true
+        target.bannedUntil = null
+        await this.persist(target)
+
+        await this.notify(target.chatID, '⛔ Блокировка изменена на бессрочную.')
+        await this.log('permanent', actor, target, { reason: target.banReason })
+
+        return { ok: true }
+    }
+
+    // Продление временного бана: срок добавляется к текущей дате окончания.
+    async extend(target, { durationText = null, actor = null } = {}) {
+        if (!target) {
+            return { ok: false, error: 'Пользователь не найден.' }
+        }
+
+        if (typeof target.isBannedNow === 'function' && !target.isBannedNow()) {
+            return { ok: false, error: 'Пользователь не забанен.' }
+        }
+
+        if (!target.bannedUntil) {
+            return { ok: false, error: 'Бан бессрочный — продлевать нечего.' }
+        }
+
+        const { ms, human } = this.parseDuration(durationText)
+
+        if (!ms) {
+            return { ok: false, error: 'Некорректный срок. Примеры: 30m, 24h, 7d, 1y.' }
+        }
+
+        const base = target.bannedUntil.getTime() > Date.now() ? target.bannedUntil.getTime() : Date.now()
+        target.bannedUntil = new Date(base + ms)
+        await this.persist(target)
+
+        await this.notify(target.chatID, `⛔ Срок блокировки продлён на ${human}.`)
+        await this.log('extend', actor, target, { durationMs: ms })
+
+        return { ok: true, human, bannedUntil: target.bannedUntil }
     }
 }
 
