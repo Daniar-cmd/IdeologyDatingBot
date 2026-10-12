@@ -20,6 +20,14 @@ class MessageHandler {
         // { step, reportID, action, reason, attempts, deadline, timer }
         this.moderationStates = {};
 
+        // Личные admin-ключи модераторов: { [chatID]: { pin1, pin2 } }.
+        // Если ключей нет — используются общие ADMIN_PIN_KEY1/2 из .env.
+        this.moderatorPins = {};
+
+        // Ожидание ввода кода приглашения в модераторы:
+        // { [chatID]: { attempts, username, name } }
+        this.inviteStates = {};
+
         // Время на весь разбор жалобы: от ввода ключа 1 до финального решения
         this.moderationTimeoutMs = 90 * 1000;
         // Попыток на ввод каждого admin-ключа
@@ -31,6 +39,41 @@ class MessageHandler {
 
     isModeratorChat(chatID) {
         return this.moderatorChatIDs.includes(Number(chatID));
+    }
+
+    // Обновляет список модераторов и их личные admin-ключи (данные из БД).
+    setModerators(chatIDs, pins = {}) {
+        this.moderatorChatIDs = Array.isArray(chatIDs) ? chatIDs.slice() : [];
+        this.moderatorPins = pins && typeof pins === 'object' ? { ...pins } : {};
+    }
+
+    // Сразу добавляет нового модератора, не дожидаясь периодического обновления.
+    addModerator(chatID, pins = null) {
+        const id = Number(chatID);
+
+        if (!Number.isInteger(id)) {
+            return;
+        }
+
+        if (!this.moderatorChatIDs.includes(id)) {
+            this.moderatorChatIDs.push(id);
+        }
+
+        if (pins) {
+            this.moderatorPins[id] = pins;
+        }
+    }
+
+    // Личный admin-ключ модератора, иначе общий ключ из .env (обратная совместимость).
+    getModeratorPin(chatID, keyNumber) {
+        const pins = this.moderatorPins[Number(chatID)];
+        const personal = pins ? (keyNumber === 1 ? pins.pin1 : pins.pin2) : null;
+
+        if (personal) {
+            return String(personal);
+        }
+
+        return keyNumber === 1 ? this.adminPin1 : this.adminPin2;
     }
 
     // Удаляет сообщение модератора с admin-ключом, чтобы ключ не оставался в чате
@@ -114,6 +157,119 @@ class MessageHandler {
             chatID,
             `🚫 Неверный admin pin ключ ${keyNumber} введён ${this.maxKeyAttempts} раза. Аккаунт модератора заморожен на 24 часа${untilText}.`
         ).catch(() => {});
+    }
+
+    // Вызывается при нажатии «Принять» в приглашении: переводим чат в режим ввода кода.
+    async startModeratorInviteInput(chatID, from = {}) {
+        if (!this.moderatorService) {
+            await this.bot.sendMessage(chatID, '❌ Модерация временно недоступна.').catch(() => {});
+            return;
+        }
+
+        this.inviteStates[chatID] = {
+            attempts: 0,
+            username: from.username || null,
+            name: from.first_name || null
+        };
+
+        await this.bot.sendMessage(
+            chatID,
+            '🔢 Введите 4-значный код приглашения, который передал администратор:'
+        ).catch(() => {});
+    }
+
+    // Возвращает true, если сообщение обработано как ввод кода приглашения.
+    async handleModeratorInviteText(chatID, text) {
+        const state = this.inviteStates[chatID];
+
+        if (!state) {
+            return false;
+        }
+
+        const code = String(text || '').trim();
+
+        if (!/^\d{4}$/.test(code)) {
+            await this.bot.sendMessage(
+                chatID,
+                '🔢 Код состоит из 4 цифр. Отправьте его одним сообщением (только цифры).'
+            ).catch(() => {});
+            return true;
+        }
+
+        if (!this.moderatorService) {
+            delete this.inviteStates[chatID];
+            await this.bot.sendMessage(chatID, '❌ Модерация временно недоступна.').catch(() => {});
+            return true;
+        }
+
+        const result = await this.moderatorService.acceptInvite(chatID, code, {
+            username: state.username,
+            name: state.name
+        }).catch(() => ({ ok: false, error: 'error' }));
+
+        if (!result.ok) {
+            if (result.error === 'invalid_code') {
+                state.attempts = (state.attempts || 0) + 1;
+
+                if (state.attempts >= 3) {
+                    delete this.inviteStates[chatID];
+                    await this.moderatorService.declineInvite(chatID).catch(() => {});
+                    await this.bot.sendMessage(
+                        chatID,
+                        '❌ Слишком много неверных попыток. Приглашение отменено.'
+                    ).catch(() => {});
+                    return true;
+                }
+
+                await this.bot.sendMessage(
+                    chatID,
+                    `❌ Неверный код. Осталось попыток: ${3 - state.attempts}.`
+                ).catch(() => {});
+                return true;
+            }
+
+            delete this.inviteStates[chatID];
+            await this.bot.sendMessage(
+                chatID,
+                '❌ Приглашение не найдено или уже обработано.'
+            ).catch(() => {});
+            return true;
+        }
+
+        delete this.inviteStates[chatID];
+        this.addModerator(chatID, { pin1: result.pin1, pin2: result.pin2 });
+
+        await this.sendModeratorPinsFile(chatID, result.pin1, result.pin2);
+
+        await this.bot.sendMessage(
+            chatID,
+            '✅ Вы стали модератором. Теперь вам будут приходить жалобы на анкеты.\n\n' +
+            'Разбор: «👁 Посмотреть» → ключ 1 → действие и причина → ключ 2.'
+        ).catch(() => {});
+        return true;
+    }
+
+    // Отправляет личные admin-ключи .txt-файлом (при сбое — текстом).
+    async sendModeratorPinsFile(chatID, pin1, pin2) {
+        const text = `IdeologyDatingBot — ваши admin-ключи модератора
+
+chat_id: ${chatID}
+Ключ 1: ${pin1}
+Ключ 2: ${pin2}
+
+Сохраните эти ключи и никому не передавайте.`;
+
+        try {
+            await this.bot.sendDocument(
+                chatID,
+                Buffer.from(text, 'utf8'),
+                { caption: '🔐 Ваши admin-ключи модератора (файл).' },
+                { filename: 'admin-pins.txt' }
+            );
+        } catch (error) {
+            console.error('Не удалось отправить файл с ключами модератора:', error.message);
+            await this.bot.sendMessage(chatID, text).catch(() => {});
+        }
     }
 
     async sendReportNotification(modChatID, report, reportedUser, reporterUser) {
@@ -204,7 +360,7 @@ ${user.description || ''}`;
                 return true;
             }
 
-            if (text.trim() !== this.adminPin1) {
+            if (text.trim() !== this.getModeratorPin(chatID, 1)) {
                 state.attempts = (state.attempts || 0) + 1;
 
                 if (state.attempts >= this.maxKeyAttempts) {
@@ -275,7 +431,7 @@ ${user.description || ''}`;
                 return true;
             }
 
-            if (text.trim() !== this.adminPin2) {
+            if (text.trim() !== this.getModeratorPin(chatID, 2)) {
                 state.attempts = (state.attempts || 0) + 1;
 
                 if (state.attempts >= this.maxKeyAttempts) {
@@ -614,6 +770,15 @@ ${user.description || ''}
                 // Шаги модерации (pin / причина) обрабатываются раньше всего
                 if (this.isModeratorChat(chatID)) {
                     const consumed = await this.handleModerationText(chatID, text, msg.message_id);
+
+                    if (consumed) {
+                        return;
+                    }
+                }
+
+                // Ввод кода приглашения в модераторы (до проверки на бан)
+                if (this.inviteStates[chatID]) {
+                    const consumed = await this.handleModeratorInviteText(chatID, text);
 
                     if (consumed) {
                         return;
@@ -1133,6 +1298,36 @@ ${user.description || ''}
                     await this.bot.answerCallbackQuery(query.id, {
                         text: '⛔ Вы забанены.'
                     }).catch(() => {});
+                    return;
+                }
+
+                // Приглашение в модераторы: принять / отказаться
+                if (data === 'mod_invite_accept' || data === 'mod_invite_decline') {
+                    const invite = this.moderatorService
+                        ? await this.moderatorService.getPendingInvite(chatID).catch(() => null)
+                        : null;
+
+                    if (!invite) {
+                        await this.bot.answerCallbackQuery(query.id, {
+                            text: 'Приглашение не найдено или уже обработано.'
+                        }).catch(() => {});
+                        return;
+                    }
+
+                    await this.bot.editMessageReplyMarkup(
+                        { inline_keyboard: [] },
+                        { chat_id: chatID, message_id: query.message.message_id }
+                    ).catch(() => {});
+
+                    if (data === 'mod_invite_decline') {
+                        await this.moderatorService.declineInvite(chatID).catch(() => {});
+                        await this.bot.answerCallbackQuery(query.id, { text: 'Вы отказались.' }).catch(() => {});
+                        await this.bot.sendMessage(chatID, '❌ Вы отказались стать модератором.').catch(() => {});
+                        return;
+                    }
+
+                    await this.bot.answerCallbackQuery(query.id, { text: 'Введите код приглашения.' }).catch(() => {});
+                    await this.startModeratorInviteInput(chatID, query.from || {});
                     return;
                 }
 

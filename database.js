@@ -93,6 +93,35 @@ async function initDatabase() {
             )
         `)
 
+        // Модераторы: личные admin-ключи и статус (активен / снят).
+        // Встроенные модераторы из MODERATORSID могут отсутствовать в таблице —
+        // тогда используются общие ключи ADMIN_PIN_KEY1/2 из .env.
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS moderators (
+                chat_id TEXT PRIMARY KEY,
+                username TEXT,
+                name TEXT,
+                pin1 TEXT,
+                pin2 TEXT,
+                added_by TEXT,
+                active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                removed_at TIMESTAMPTZ
+            )
+        `)
+
+        // Приглашения в модераторы (одно активное приглашение на пользователя)
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS moderator_invites (
+                chat_id TEXT PRIMARY KEY,
+                invite_code TEXT NOT NULL,
+                invited_by TEXT,
+                status TEXT DEFAULT 'pending',
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                resolved_at TIMESTAMPTZ
+            )
+        `)
+
         // Логи действий модерации (консоль + Telegram)
         await db.query(`
             CREATE TABLE IF NOT EXISTS moderation_actions (

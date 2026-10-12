@@ -5,10 +5,12 @@ const TelegramApi = require('node-telegram-bot-api')
 
 const ModerationConsole = require('./cli/ModerationConsole')
 const ModerationActionsService = require('./services/ModerationActionsService')
+const ModeratorService = require('./services/ModeratorService')
 const ReportService = require('./services/ReportService')
 const User = require('./models/user')
 const UserRepository = require('./repositories/UserRepository')
 const ModerationActionRepository = require('./repositories/ModerationActionRepository')
+const ModeratorRepository = require('./repositories/ModeratorRepository')
 const ReportRepository = require('./repositories/ReportRepository')
 const { parseModeratorIDs } = require('./config/moderators')
 const { db, initDatabase } = require('./database')
@@ -123,8 +125,11 @@ async function main() {
 
     const userRepository = new UserRepository(db, User)
     const moderationActionRepository = new ModerationActionRepository(db)
+    const moderatorRepository = new ModeratorRepository(db)
     const reportRepository = new ReportRepository(db)
     const reportService = new ReportService(reportRepository)
+
+    const moderatorService = new ModeratorService(moderatorRepository)
 
     // Один и тот же Telegram-клиент (без поллинга) используется для уведомлений
     // пользователям и для принудительной отправки жалоб модераторам из консоли.
@@ -145,7 +150,8 @@ async function main() {
         reportService,
         notifier,
         moderatorChatIDs: parseModeratorIDs(process.env.MODERATORSID),
-        moderationActionRepository
+        moderationActionRepository,
+        moderatorService
     })
 
     let ok = false

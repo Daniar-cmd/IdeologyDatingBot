@@ -70,6 +70,7 @@ class Bot {
 
         this.saveInterval = null
         this.moderationInterval = null
+        this.moderatorInterval = null
         this.syncingModeration = false
     }
 
@@ -93,6 +94,46 @@ class Bot {
 
     async saveAllUsers() {
         await this.userRepository.saveAll(this.users)
+    }
+
+    // Подтягивает модераторов из БД: активных добавляет к встроенным (MODERATORSID),
+    // снятых убирает. Обновляет список получателей жалоб и их личные admin-ключи.
+    async refreshModerators() {
+        const envIDs = parseModeratorIDs(process.env.MODERATORSID || process.env.REPORT_CHAT_IDS)
+        const ids = new Set(envIDs)
+        const pins = {}
+
+        let rows = []
+
+        try {
+            rows = await this.moderatorRepository.listModerators()
+        } catch (error) {
+            console.error('Ошибка чтения модераторов из БД:', error.message)
+        }
+
+        for (const row of rows) {
+            const id = Number(row.chat_id)
+
+            if (!Number.isInteger(id)) {
+                continue
+            }
+
+            if (row.active) {
+                ids.add(id)
+
+                if (row.pin1 || row.pin2) {
+                    pins[id] = { pin1: row.pin1 || null, pin2: row.pin2 || null }
+                }
+            } else {
+                ids.delete(id)
+            }
+        }
+
+        this.moderatorChatIDs = [...ids]
+
+        if (this.messageHandler) {
+            this.messageHandler.setModerators(this.moderatorChatIDs, pins)
+        }
     }
 
     // Подтягивает поля модерации из БД в память работающего бота, чтобы изменения
@@ -183,6 +224,14 @@ class Bot {
                 console.error('Ошибка синхронизации модерации:', error)
             })
         }, 2000)
+
+        // Список модераторов подтягиваем из БД (приглашения/снятия из панели),
+        // чтобы изменения применялись без перезапуска бота.
+        this.moderatorInterval = setInterval(() => {
+            this.refreshModerators().catch(error => {
+                console.error('Ошибка обновления модераторов:', error)
+            })
+        }, 5000)
     }
 
     registerCommands() {
@@ -210,6 +259,8 @@ class Bot {
         try {
 
             await initDatabase()
+
+            await this.refreshModerators()
 
             if (this.moderatorChatIDs.length === 0) {
                 console.warn('⚠️  MODERATORSID не задан — уведомления о жалобах модераторам отправляться не будут.')

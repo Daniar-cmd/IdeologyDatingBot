@@ -4,7 +4,7 @@ const crypto = require('crypto')
 // Консольная админ-панель: вход по имени администратора и его личному паролю,
 // далее — локальное меню. Действия выполняются через ModerationActionsService.
 class ModerationConsole {
-    constructor({ input, output, accounts = [], userRepository = null, moderationActions = null, reportService = null, notifier = null, moderatorChatIDs = [], moderationActionRepository = null }) {
+    constructor({ input, output, accounts = [], userRepository = null, moderationActions = null, reportService = null, notifier = null, moderatorChatIDs = [], moderationActionRepository = null, moderatorService = null }) {
         this.input = input
         this.output = output
         // Имена администраторов сравниваем без учёта регистра
@@ -20,6 +20,7 @@ class ModerationConsole {
         this.notifier = notifier
         this.moderatorChatIDs = Array.isArray(moderatorChatIDs) ? moderatorChatIDs : []
         this.moderationActionRepository = moderationActionRepository
+        this.moderatorService = moderatorService
         this.muted = false
 
         this.rl = readline.createInterface({
@@ -46,13 +47,15 @@ class ModerationConsole {
             ['1', 'Список пользователей'],
             ['2', 'Репорты'],
             ['3', 'Заблокированные пользователи'],
-            ['4', 'История администрирования']
+            ['4', 'История администрирования'],
+            ['5', 'Модераторы']
         ])
 
         this.USERS_PER_PAGE = 50
         this.REPORTS_PER_PAGE = 50
         this.BANNED_PER_PAGE = 50
         this.HISTORY_PER_PAGE = 50
+        this.MODERATORS_PER_PAGE = 50
     }
 
     close() {
@@ -129,13 +132,18 @@ class ModerationConsole {
                 continue
             }
 
+            if (choice === '5') {
+                await this.showModeratorsList(account)
+                continue
+            }
+
             if (this.menuItems.has(choice)) {
                 const section = this.menuItems.get(choice)
                 this.output.write(`\n📁 Раздел «${section}» — в разработке.\n\n`)
                 continue
             }
 
-            this.output.write('❌ Неверный пункт. Выберите 1–4 или 0.\n\n')
+            this.output.write('❌ Неверный пункт. Выберите 1–5 или 0.\n\n')
         }
     }
 
@@ -153,6 +161,7 @@ class ModerationConsole {
         this.output.write('2. Репорты\n')
         this.output.write('3. Заблокированные пользователи\n')
         this.output.write('4. История администрирования\n')
+        this.output.write('5. Модераторы\n')
         this.output.write('0. Выход.\n')
     }
 
@@ -493,7 +502,7 @@ class ModerationConsole {
         let targets
 
         if (target === '.') {
-            targets = this.moderatorChatIDs
+            targets = await this.activeModeratorChatIDs()
         } else {
             const id = Number(target)
 
@@ -506,7 +515,7 @@ class ModerationConsole {
         }
 
         if (targets.length === 0) {
-            this.output.write('❌ Нет модераторов для отправки (MODERATORSID пуст).\n')
+            this.output.write('❌ Нет модераторов для отправки.\n')
             return
         }
 
@@ -979,6 +988,304 @@ class ModerationConsole {
         }
 
         return `${Math.round(value / 86400000)} дн`
+    }
+
+    // ---------------- Вкладка «5. Модераторы» ----------------
+
+    // Список модераторов: встроенные из MODERATORSID + записи из БД (активные/снятые).
+    async loadModeratorEntries() {
+        const rows = await this.moderatorService.listModerators()
+        const byID = new Map()
+
+        for (const row of rows) {
+            const id = Number(row.chat_id)
+
+            if (!Number.isInteger(id)) {
+                continue
+            }
+
+            byID.set(id, {
+                chatID: id,
+                username: row.username || null,
+                status: row.active ? 'active' : 'removed',
+                source: 'db',
+                addedBy: row.added_by || null,
+                createdAt: row.created_at || null,
+                removedAt: row.removed_at || null,
+                hasPins: Boolean(row.pin1 || row.pin2)
+            })
+        }
+
+        const entries = []
+
+        // Встроенные модераторы, которых нет в БД (личных ключей нет — общие из .env)
+        for (const envID of this.moderatorChatIDs) {
+            if (!byID.has(envID)) {
+                entries.push({
+                    chatID: envID,
+                    username: null,
+                    status: 'active',
+                    source: 'env',
+                    addedBy: null,
+                    createdAt: null,
+                    removedAt: null,
+                    hasPins: false
+                })
+            }
+        }
+
+        for (const entry of byID.values()) {
+            entries.push(entry)
+        }
+
+        // Активные — вперёд, затем свежие сверху
+        entries.sort((a, b) => {
+            if (a.status !== b.status) {
+                return a.status === 'active' ? -1 : 1
+            }
+
+            const at = a.createdAt ? new Date(a.createdAt).getTime() : 0
+            const bt = b.createdAt ? new Date(b.createdAt).getTime() : 0
+
+            if (bt !== at) {
+                return bt - at
+            }
+
+            return a.chatID - b.chatID
+        })
+
+        return entries
+    }
+
+    // Активные получатели жалоб: MODERATORSID + активные из БД.
+    async activeModeratorChatIDs() {
+        if (!this.moderatorService) {
+            return this.moderatorChatIDs
+        }
+
+        const entries = await this.loadModeratorEntries()
+
+        return entries.filter(entry => entry.status === 'active').map(entry => entry.chatID)
+    }
+
+    async showModeratorsList(account) {
+        if (!this.moderatorService) {
+            this.output.write('\n❌ Не подключён сервис модераторов (moderatorService).\n\n')
+            return
+        }
+
+        let page = 1
+
+        while (true) {
+            const entries = await this.loadModeratorEntries()
+            const total = entries.length
+            const totalPages = Math.max(1, Math.ceil(total / this.MODERATORS_PER_PAGE))
+
+            if (page > totalPages) {
+                page = totalPages
+            }
+
+            if (page < 1) {
+                page = 1
+            }
+
+            const offset = (page - 1) * this.MODERATORS_PER_PAGE
+            const pageItems = entries.slice(offset, offset + this.MODERATORS_PER_PAGE)
+            const pendingInvites = await this.moderatorService.listPendingInvites()
+
+            this.renderModeratorsPage(account, page, totalPages, total, pageItems, offset, pendingInvites)
+
+            const input = (await this.ask('\nВведите команду: ')).trim()
+
+            if (input === '0') {
+                return
+            }
+
+            if (input === '<') {
+                if (page <= 1) {
+                    this.output.write('❌ Это первая страница.\n')
+                } else {
+                    page -= 1
+                }
+                continue
+            }
+
+            if (input === '>') {
+                if (page >= totalPages) {
+                    this.output.write('❌ Это последняя страница.\n')
+                } else {
+                    page += 1
+                }
+                continue
+            }
+
+            const inviteMatch = input.match(/^invite\s+(-?\d+)$/i)
+
+            if (inviteMatch) {
+                await this.inviteModerator(account, parseInt(inviteMatch[1], 10), entries)
+                continue
+            }
+
+            const readMatch = input.match(/^read\s+(\d+)$/i)
+
+            if (readMatch) {
+                const target = entries[parseInt(readMatch[1], 10) - 1]
+
+                if (!target) {
+                    this.output.write('❌ Нет модератора с таким номером.\n')
+                    continue
+                }
+
+                await this.showModeratorCard(target)
+                continue
+            }
+
+            const removeMatch = input.match(/^remove\s+(\d+)$/i)
+
+            if (removeMatch) {
+                const value = parseInt(removeMatch[1], 10)
+                // Сначала пробуем как chat_id, иначе — как номер строки списка
+                const target = entries.find(entry => entry.chatID === value) || entries[value - 1]
+
+                if (!target) {
+                    this.output.write('❌ Нет модератора с таким номером/chat_id.\n')
+                    continue
+                }
+
+                await this.removeModerator(target)
+                continue
+            }
+
+            this.output.write('❌ Неверная команда.\n')
+        }
+    }
+
+    renderModeratorsPage(account, page, totalPages, total, entries, offset, pendingInvites) {
+        const border = '='.repeat(40)
+        this.output.write(`\n${border}\n`)
+        this.output.write('=== IdeologyDatingBot | Moderators ===\n')
+        this.output.write(`${border}\n`)
+        this.output.write(`Админ: ${account.name}\n`)
+        this.output.write(`Страница: ${page}/${totalPages} | Всего: ${total}\n\n`)
+
+        if (entries.length === 0) {
+            this.output.write('Список модераторов пуст.\n\n')
+        } else {
+            entries.forEach((entry, index) => {
+                const num = offset + index + 1
+                const username = entry.username ? `@${entry.username}` : 'без username'
+                const status = entry.status === 'active' ? 'активен' : 'снят'
+                const source = entry.source === 'env' ? 'MODERATORSID' : 'панель'
+                const added = entry.createdAt ? this.formatDateTime(entry.createdAt) : '—'
+                const by = entry.addedBy || '—'
+
+                this.output.write(
+                    `[${num}] ${entry.chatID} | ${username} | ${status} | источник: ${source} | добавил: ${by} | ${added}\n`
+                )
+            })
+        }
+
+        if (pendingInvites && pendingInvites.length > 0) {
+            this.output.write('\nОжидают ответа на приглашение:\n')
+
+            for (const invite of pendingInvites) {
+                this.output.write(
+                    `   ${invite.chat_id} | код ${invite.invite_code} | пригласил: ${invite.invited_by || '—'} | ${this.formatDateTime(invite.created_at)}\n`
+                )
+            }
+        }
+
+        this.output.write('\nНавигация:\n')
+        this.output.write('<  — предыдущая страница | >  — следующая страница | 0 — главное меню\n')
+        this.output.write('Команды: invite <chat_id> — пригласить | remove <номер|chat_id> — снять права | read <номер> — подробности.\n')
+    }
+
+    // Команда invite — приглашение в модераторы. Код печатается здесь и передаётся
+    // пользователю; сообщение с кнопками шлёт тот же клиент, что и уведомления.
+    async inviteModerator(account, chatID, entries) {
+        if (!Number.isInteger(chatID) || chatID <= 0) {
+            this.output.write('❌ Некорректный chat_id.\n')
+            return
+        }
+
+        const existing = entries.find(entry => entry.chatID === chatID)
+
+        if (existing && existing.status === 'active') {
+            this.output.write(`❌ Пользователь ${chatID} уже модератор.\n`)
+            return
+        }
+
+        const code = await this.moderatorService.createInvite(chatID, account.name)
+
+        this.output.write(`✅ Приглашение создано для ${chatID}.\nКод (передайте пользователю): ${code}\n`)
+
+        if (!this.notifier) {
+            this.output.write('⚠️  Telegram-клиент недоступен — приглашение сохранено, но сообщение не отправлено.\n')
+            return
+        }
+
+        const text = '🔔 Вас пригласили стать модератором IdeologyDatingBot.\n\n' +
+            'Если вы согласны, нажмите «✅ Принять» и введите 4-значный код, который передал администратор.'
+
+        try {
+            await this.notifier.sendMessage(chatID, text, {
+                reply_markup: {
+                    inline_keyboard: [[
+                        { text: '✅ Принять', callback_data: 'mod_invite_accept' },
+                        { text: '❌ Отказаться', callback_data: 'mod_invite_decline' }
+                    ]]
+                }
+            })
+            this.output.write('📨 Приглашение отправлено в Telegram.\n')
+        } catch (error) {
+            this.output.write(`❌ Не удалось отправить приглашение: ${error.message}\n`)
+            this.output.write('ℹ️  Пользователь должен хотя бы раз запустить бота (/start).\n')
+        }
+    }
+
+    async removeModerator(target) {
+        if (target.status === 'removed') {
+            this.output.write(`ℹ️  Модератор ${target.chatID} уже снят.\n`)
+            return
+        }
+
+        await this.moderatorService.removeModerator(target.chatID)
+        this.output.write(`✅ Пользователь ${target.chatID} лишён прав модератора.\n`)
+    }
+
+    async showModeratorCard(entry) {
+        while (true) {
+            this.renderModeratorDetails(entry)
+
+            const input = (await this.ask('\nВведите команду: ')).trim()
+
+            if (input === '0') {
+                return
+            }
+
+            this.output.write('❌ Неверная команда. Доступно: 0 — назад.\n')
+        }
+    }
+
+    renderModeratorDetails(entry) {
+        const border = '='.repeat(40)
+
+        this.output.write(`\n${border}\n`)
+        this.output.write(`=== Модератор ${entry.chatID} ===\n`)
+        this.output.write(`${border}\n`)
+        this.output.write(`chat_id: ${entry.chatID}\n`)
+        this.output.write(`username: ${entry.username ? `@${entry.username}` : '—'}\n`)
+        this.output.write(`Статус: ${entry.status === 'active' ? 'активен' : 'снят'}\n`)
+        this.output.write(`Источник: ${entry.source === 'env' ? 'MODERATORSID (встроенный)' : 'панель администрирования'}\n`)
+        this.output.write(`Добавил: ${entry.addedBy || '—'}\n`)
+        this.output.write(`Добавлен: ${this.formatDateTime(entry.createdAt)}\n`)
+
+        if (entry.removedAt) {
+            this.output.write(`Снят: ${this.formatDateTime(entry.removedAt)}\n`)
+        }
+
+        this.output.write(`Личные admin-ключи: ${entry.hasPins ? 'установлены' : 'нет (общие из .env)'}\n`)
+        this.output.write('\n')
     }
 
     // «@username (chat_id)» либо «без username (chat_id)».
