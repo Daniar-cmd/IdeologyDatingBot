@@ -135,8 +135,9 @@ class MessageHandler {
                     ]]
                 }
             });
+            console.log(`[Репорт] уведомление о репорте #${report.id} отправлено модератору ${modChatID}`);
         } catch (error) {
-            console.error(`Не удалось отправить уведомление о жалобе #${report.id}:`, error.message);
+            console.error(`Не удалось отправить уведомление о жалобе #${report.id} модератору ${modChatID}:`, error.message);
         }
     }
 
@@ -657,14 +658,19 @@ ${user.description || ''}
                     if (result.report) {
                         const reporterUser = this.users[chatID];
                         const reportedUser = this.users[targetChatID];
+                        let sent = 0, skippedFrozen = 0;
 
                         for (const modChatID of this.moderatorChatIDs) {
-                            if (await this.getModeratorFreezeUntil(modChatID)) {
+                            const freezeUntil = await this.getModeratorFreezeUntil(modChatID);
+                            if (freezeUntil) {
+                                skippedFrozen++;
                                 continue;
                             }
 
                             await this.sendReportNotification(modChatID, result.report, reportedUser, reporterUser);
+                            sent++;
                         }
+                        console.log(`[Репорт] #${result.report.id}: уведомлено модераторов=${sent}, пропущено (заморозка)=${skippedFrozen}, всего получателей=${this.moderatorChatIDs.length}`);
                     }
                     return;
                 }
