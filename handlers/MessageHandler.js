@@ -1252,8 +1252,8 @@ Telegram: ${currentUsername}`
 
                     await this.sendMessage(
                         chatID,
-                        'Привет! Это IdeologyDatingBot. Здесь ты сможешь найти друзей или вторую половинку на основании общих взглядов, ценностей и мировоззрения.\n\nВведите инвайт-код для входа в систему:',
-                        { reply_markup: { remove_keyboard: true } }
+                        'Привет! Это IdeologyDatingBot. Здесь ты сможешь найти друзей или вторую половинку на основании общих взглядов, ценностей и мировоззрения.\n\n👤 Давайте создадим ваш профиль.\n\nКак вас зовут?',
+                        this.nameKeyboard()
                     );
                     return;
                 }
@@ -1461,22 +1461,6 @@ Telegram: ${currentUsername}`
                                 one_time_keyboard: true
                             }
                         }
-                    );
-                    return;
-                }
-
-                if (user.waitingForInvite) {
-                    const result = this.registrationService.validateInvite(chatID, text);
-
-                    if (!result.success) {
-                        await this.sendMessage(chatID, result.message);
-                        return;
-                    }
-
-                    await this.sendMessage(
-                        chatID,
-                        '✅ Инвайт-код принят! Вы успешно вошли в систему.\n\n👤 Давайте создадим ваш профиль.\n\nКак вас зовут?',
-                        this.nameKeyboard()
                     );
                     return;
                 }

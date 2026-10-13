@@ -1,8 +1,7 @@
 class RegistrationService {
-constructor(users, User, inviteCode, cityService, contentFilter, messageService = null) {
+constructor(users, User, cityService, contentFilter, messageService = null) {
 this.users = users
 this.User = User
-this.inviteCode = inviteCode
 this.cityService = cityService
 this.contentFilter = contentFilter
 this.messageService = messageService
@@ -83,7 +82,6 @@ restartRegistration(chatID) {
     // и у пользователя, и у всех, кто с ним взаимодействовал.
     this.clearDatingHistory(chatID)
 
-    user.waitingForInvite = false
     user.waitingForGender = false
     user.waitingForLookingFor = false
     user.waitingForAge = false
@@ -104,33 +102,12 @@ startRegistration(chatID, username = null) {
     const user = new this.User({
         chatID: Number(chatID),
         username,
-        registered: false
+        registered: true
     })
-    user.waitingForInvite = true
+    // Вход свободный: инвайт-код больше не требуется, сразу переходим к анкете.
+    user.waitingForName = true
     this.users[Number(chatID)] = user
     return user
-}
-validateInvite(chatID, text) {
-    const user = this.users[Number(chatID)]
-    if (!user || !user.waitingForInvite) {
-        return {
-            success: false,
-            message: 'Регистрация не ожидает инвайт-код.'
-        }
-    }
-    if (text !== this.inviteCode) {
-        return {
-            success: false,
-            message: '❌ Неверный инвайт-код. Попробуйте ещё раз.'
-        }
-    }
-    user.registered = true
-    user.waitingForInvite = false
-    user.waitingForName = true
-    return {
-        success: true,
-        user
-    }
 }
 setName(chatID, text) {
     const user = this.users[Number(chatID)]

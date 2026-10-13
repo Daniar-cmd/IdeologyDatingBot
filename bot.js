@@ -51,7 +51,6 @@ class Bot {
         this.registrationService = new RegistrationService(
             this.users,
             User,
-            process.env.INVITE_CODE || 'YABLOKO',
             this.cityService,
             this.contentFilter,
             this.messageService
