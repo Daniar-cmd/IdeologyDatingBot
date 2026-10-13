@@ -23,6 +23,11 @@ class ModerationConsole {
         this.moderatorService = moderatorService
         this.supportTicketService = supportTicketService
         this.devHistoryService = devHistoryService
+        // Кэш счётчика непрочитанных тикетов. Обращение к БД на каждой отрисовке
+        // меню ощутимо тормозит консоль (особенно с удалённой базой), поэтому
+        // счётчик рисуется из кэша, а обновляется в фоне.
+        this.unreadTickets = 0
+        this.unreadTicketsPromise = null
         this.muted = false
 
         this.rl = readline.createInterface({
@@ -105,10 +110,17 @@ class ModerationConsole {
     }
 
     async menuLoop(account) {
+        // Один раз подгружаем счётчик непрочитанных, дальше обновляем в фоне,
+        // чтобы не задерживать отрисовку меню сетевым запросом к БД.
+        await this.refreshUnreadTickets()
+
         while (true) {
             this.printHeader(account)
-            await this.printTicketsNotice()
+            this.printTicketsNotice()
             this.printMenu()
+
+            // Обновляем счётчик в фоне — ответ пользователя не ждём.
+            this.refreshUnreadTickets()
 
             const choice = (await this.ask('\nВыберите пункт: ')).trim()
 
@@ -150,6 +162,8 @@ class ModerationConsole {
 
             if (choice === '7') {
                 await this.showTicketsList(account)
+                // После чтения/ответов счётчик непрочитанных мог измениться.
+                await this.refreshUnreadTickets()
                 continue
             }
 
@@ -171,23 +185,43 @@ class ModerationConsole {
         this.output.write(`Админ: ${account.name}\n`)
     }
 
-    // В главном меню показываем число ещё не прочитанных админами обращений.
-    async printTicketsNotice() {
+    // Обновляет кэш непрочитанных тикетов. В один момент времени выполняется
+    // не более одного запроса: повторные вызовы ждут уже начатый. Никогда не
+    // отклоняется — счётчик информационный, а фоновые вызовы не ожидаются.
+    async refreshUnreadTickets() {
         if (!this.supportTicketService) {
+            return this.unreadTickets
+        }
+
+        if (this.unreadTicketsPromise) {
+            return this.unreadTicketsPromise
+        }
+
+        const run = async () => {
+            try {
+                this.unreadTickets = await this.supportTicketService.getUnreadCount()
+            } catch (error) {
+                // Ошибку БД здесь не показываем: меню важнее счётчика.
+            }
+
+            return this.unreadTickets
+        }
+
+        this.unreadTicketsPromise = run().finally(() => {
+            this.unreadTicketsPromise = null
+        })
+
+        return this.unreadTicketsPromise
+    }
+
+    // В главном меню показываем число ещё не прочитанных админами обращений.
+    // Рисуется из кэша (без запроса к БД), чтобы меню открывалось мгновенно.
+    printTicketsNotice() {
+        if (!this.supportTicketService || this.unreadTickets <= 0) {
             return
         }
 
-        let unread = 0
-
-        try {
-            unread = await this.supportTicketService.getUnreadCount()
-        } catch (error) {
-            return
-        }
-
-        if (unread > 0) {
-            this.output.write(`📮 Непрочитанных тикетов [${unread}]\n`)
-        }
+        this.output.write(`📮 Непрочитанных тикетов [${this.unreadTickets}]\n`)
     }
 
     printMenu() {
