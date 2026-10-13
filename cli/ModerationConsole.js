@@ -314,8 +314,7 @@ class ModerationConsole {
         let page = 1
 
         while (true) {
-            const allUsers = await this.userRepository.findAll({ orderByCreatedAtDesc: true })
-            const total = allUsers.length
+            const total = await this.userRepository.countAll()
             const totalPages = Math.max(1, Math.ceil(total / this.USERS_PER_PAGE))
 
             if (page > totalPages) {
@@ -327,7 +326,11 @@ class ModerationConsole {
             }
 
             const offset = (page - 1) * this.USERS_PER_PAGE
-            const users = allUsers.slice(offset, offset + this.USERS_PER_PAGE)
+            const users = await this.userRepository.findAll({
+                orderByCreatedAtDesc: true,
+                limit: this.USERS_PER_PAGE,
+                offset
+            })
 
             this.renderUsersPage(account, page, totalPages, total, users, offset)
 
@@ -366,7 +369,7 @@ class ModerationConsole {
                 continue
             }
 
-            await this.executeAction(account, allUsers, parsed)
+            await this.executeAction(account, users, parsed, offset)
         }
     }
 
@@ -643,27 +646,6 @@ class ModerationConsole {
 
     // ---------------- Вкладка «3. Заблокированные пользователи» ----------------
 
-    // Активные (по сроку) забаненные пользователи, свежие баны сверху.
-    async loadBannedUsers() {
-        const all = await this.userRepository.findAll()
-        const banned = all.filter(user =>
-            typeof user.isBannedNow === 'function' ? user.isBannedNow() : Boolean(user.banned)
-        )
-
-        banned.sort((a, b) => {
-            const at = a.bannedAt ? a.bannedAt.getTime() : 0
-            const bt = b.bannedAt ? b.bannedAt.getTime() : 0
-
-            if (bt !== at) {
-                return bt - at
-            }
-
-            return Number(a.chatID) - Number(b.chatID)
-        })
-
-        return banned
-    }
-
     async showBannedList(account) {
         if (!this.userRepository) {
             this.output.write('\n❌ Не подключён репозиторий пользователей (userRepository).\n\n')
@@ -673,8 +655,7 @@ class ModerationConsole {
         let page = 1
 
         while (true) {
-            const banned = await this.loadBannedUsers()
-            const total = banned.length
+            const total = await this.userRepository.countBanned()
             const totalPages = Math.max(1, Math.ceil(total / this.BANNED_PER_PAGE))
 
             if (page > totalPages) {
@@ -686,7 +667,10 @@ class ModerationConsole {
             }
 
             const offset = (page - 1) * this.BANNED_PER_PAGE
-            const pageItems = banned.slice(offset, offset + this.BANNED_PER_PAGE)
+            const pageItems = await this.userRepository.findBanned({
+                limit: this.BANNED_PER_PAGE,
+                offset
+            })
 
             this.renderBannedPage(account, page, totalPages, total, pageItems, offset)
 
@@ -725,7 +709,7 @@ class ModerationConsole {
                 continue
             }
 
-            const target = banned[parsed.number - 1]
+            const target = pageItems[parsed.number - offset - 1]
 
             if (!target) {
                 this.output.write('❌ Нет пользователя с таким номером.\n')
@@ -1919,10 +1903,13 @@ class ModerationConsole {
         return { command, number, durationText, reason }
     }
 
-    async executeAction(account, allUsers, parsed) {
+    // pageUsers — пользователи текущей страницы; number — сквозной номер из
+    // списка (нумерация идёт с учётом offset), поэтому индекс пересчитываем.
+    async executeAction(account, pageUsers, parsed, offset = 0) {
         const { command, number, durationText, reason } = parsed
+        const index = number - offset - 1
 
-        if (!Number.isInteger(number) || number < 1 || number > allUsers.length) {
+        if (!Number.isInteger(number) || number < 1 || index < 0 || index >= pageUsers.length) {
             this.output.write(`❌ Нет пользователя с номером ${number}.\n`)
             return
         }
@@ -1932,7 +1919,7 @@ class ModerationConsole {
             return
         }
 
-        const target = allUsers[number - 1]
+        const target = pageUsers[index]
         const actor = { name: account.name, telegramID: account.telegramID }
 
         if (!(await this.confirmActionPin(account))) {

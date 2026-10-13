@@ -60,40 +60,83 @@ class UserRepository {
 
         const result = await this.db.query(query, params)
 
-        return result.rows.map(row => {
-            const user = new this.User({
-                chatID: Number(row.chat_id),
-                username: row.username || null,
-                registered: Boolean(row.registered),
-                name: row.name || null,
-                gender: row.gender || null,
-                lookingFor: row.looking_for || null,
-                age: row.age ?? null,
-                description: row.description || '',
-                city: row.city || null,
-                isGlobal: Boolean(row.is_global),
-                hidden: Boolean(row.hidden),
-                banned: Boolean(row.banned),
-                bannedUntil: row.banned_until ? new Date(row.banned_until) : null,
-                bannedAt: row.banned_at ? new Date(row.banned_at) : null,
-                bannedBy: row.banned_by || null,
-                banReason: row.ban_reason || null,
-                warnings: Number(row.warnings) || 0,
-                photos: row.photos || [],
-                likes: row.likes || [],
-                likedBy: row.liked_by || [],
-                viewed: row.viewed || [],
-                matches: row.matches || []
-            })
+        return result.rows.map(row => this.mapRow(row))
+    }
 
-            if (row.state) {
-                user[row.state] = true
-            }
-
-            user.createdAt = row.created_at ? new Date(row.created_at) : null
-
-            return user
+    // Строка таблицы users → модель User. Общий маппер для findAll и findBanned.
+    mapRow(row) {
+        const user = new this.User({
+            chatID: Number(row.chat_id),
+            username: row.username || null,
+            registered: Boolean(row.registered),
+            name: row.name || null,
+            gender: row.gender || null,
+            lookingFor: row.looking_for || null,
+            age: row.age ?? null,
+            description: row.description || '',
+            city: row.city || null,
+            isGlobal: Boolean(row.is_global),
+            hidden: Boolean(row.hidden),
+            banned: Boolean(row.banned),
+            bannedUntil: row.banned_until ? new Date(row.banned_until) : null,
+            bannedAt: row.banned_at ? new Date(row.banned_at) : null,
+            bannedBy: row.banned_by || null,
+            banReason: row.ban_reason || null,
+            warnings: Number(row.warnings) || 0,
+            photos: row.photos || [],
+            likes: row.likes || [],
+            likedBy: row.liked_by || [],
+            viewed: row.viewed || [],
+            matches: row.matches || []
         })
+
+        if (row.state) {
+            user[row.state] = true
+        }
+
+        user.createdAt = row.created_at ? new Date(row.created_at) : null
+
+        return user
+    }
+
+    // Общее число анкет — для пагинации консольной панели.
+    async countAll() {
+        const result = await this.db.query('SELECT COUNT(*)::int AS count FROM users')
+        return result.rows[0]?.count || 0
+    }
+
+    // Активные (по сроку) забаненные пользователи страницей, свежие баны сверху.
+    // Условие совпадает с User#isBannedNow(): banned = true и срок не истёк.
+    async findBanned({ limit, offset } = {}) {
+        const params = []
+        let query = `
+            SELECT * FROM users
+            WHERE banned = TRUE
+              AND (banned_until IS NULL OR banned_until > NOW())
+            ORDER BY banned_at DESC NULLS LAST, chat_id ASC`
+
+        if (typeof limit === 'number') {
+            params.push(limit)
+            query = `${query} LIMIT $${params.length}`
+
+            if (typeof offset === 'number') {
+                params.push(offset)
+                query = `${query} OFFSET $${params.length}`
+            }
+        }
+
+        const result = await this.db.query(query, params)
+
+        return result.rows.map(row => this.mapRow(row))
+    }
+
+    // Число активных забаненных — для пагинации консольной панели.
+    async countBanned() {
+        const result = await this.db.query(`
+            SELECT COUNT(*)::int AS count FROM users
+            WHERE banned = TRUE
+              AND (banned_until IS NULL OR banned_until > NOW())`)
+        return result.rows[0]?.count || 0
     }
 
     // Преобразует модель пользователя в массив значений для upsert.
