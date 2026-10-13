@@ -662,11 +662,68 @@ ${user.description || ''}`;
 
     // Клавиатура на шаге ввода причины репорта: можно отменить.
     reportCancelKeyboard() {
+        return this.cancelKeyboard();
+    }
+
+    // Общая клавиатура «Отмена» для пошагового ввода (репорт, поддержка).
+    cancelKeyboard() {
         return {
             reply_markup: {
                 keyboard: [['Отмена']],
                 resize_keyboard: true,
                 one_time_keyboard: true
+            }
+        };
+    }
+
+    // Справка: как работает сервис, нюансы и список команд.
+    helpText() {
+        return [
+            'ℹ️ Как работает сервис',
+            '',
+            'Это бот для знакомств по интересам. Вы заполняете анкету, смотрите анкеты других людей и решаете, кто вам интересен.',
+            '',
+            'Что означают кнопки:',
+            '• ❤️ — понравился человек. Если он ответит взаимностью, у вас мэтч, и бот сообщит об этом.',
+            '• 💌 — отправить человеку короткое сообщение вместе с лайком.',
+            '• ❌ — пропустить анкету.',
+            '• Анкету можно скрыть из поиска и вернуться в него позже.',
+            '',
+            'Команды:',
+            '• /myprofile — посмотреть и изменить свою анкету',
+            '• /lenta — смотреть анкеты',
+            '• /report — пожаловаться на анкету',
+            '• /help — эта справка',
+            '',
+            'Частые вопросы:',
+            '• Мало анкет — загляните в /lenta чуть позже, база пополняется.',
+            '• Анкета не сохраняется — проверьте, что выбраны фото, возраст и город.',
+            '• Фото отклоняют — используйте реальные снимки без запрещённого контента.',
+            '',
+            'Остались вопросы? Напишите в поддержку — мы читаем все обращения.'
+        ].join('\n');
+    }
+
+    // Кнопки под справкой: поддержка и возврат в поиск.
+    helpKeyboard() {
+        return {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: '🆘 Написать в поддержку', callback_data: 'help_support' }],
+                    [{ text: '🔎 Продолжить поиск', callback_data: 'menu_lenta' }]
+                ]
+            }
+        };
+    }
+
+    // Кнопки выбора типа обращения в поддержку.
+    supportTypeKeyboard() {
+        return {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: '🐞 Сообщить о баге', callback_data: 'help_bug' }],
+                    [{ text: '💡 Внести предложение', callback_data: 'help_idea' }]
+                ]
             }
         };
     }
@@ -1060,6 +1117,56 @@ Telegram: ${currentUsername}`
         await this.showNextProfile(chatID);
     }
 
+    // Приём текста обращения в поддержку. Сохранение тикета и уведомление
+    // модераторов подключим отдельным пакетом — сейчас обращение принимается
+    // и подтверждается пользователю.
+    async handleSupportMessage(chatID, user, text) {
+        if (text === 'Отмена') {
+            user.supportPending = null;
+            await this.sendMessage(
+                chatID,
+                '❌ Обращение отменено.',
+                { reply_markup: { remove_keyboard: true } }
+            );
+            return;
+        }
+
+        if (!text) {
+            await this.sendMessage(
+                chatID,
+                '❌ Пожалуйста, опишите обращение текстом.',
+                this.cancelKeyboard()
+            );
+            return;
+        }
+
+        if (text.startsWith('/')) {
+            await this.sendMessage(
+                chatID,
+                '❌ Это команда, а не текст обращения.\n\nОпишите обращение или нажмите «Отмена».',
+                this.cancelKeyboard()
+            );
+            return;
+        }
+
+        const type = user.supportPending;
+        user.supportPending = null;
+
+        const typeLabel = type === 'bug' ? 'Баг' : 'Предложение';
+        // TODO: сохранить тикет и уведомить модераторов (механика тикетов — позже).
+        console.log(`[Support] ${typeLabel} от ${chatID}: ${text}`);
+
+        await this.sendWithInline(
+            chatID,
+            '✅ Спасибо! Ваше обращение принято. Мы читаем все сообщения и при необходимости свяжемся с вами.',
+            {
+                inline_keyboard: [[
+                    { text: '🔎 Продолжить поиск', callback_data: 'menu_lenta' }
+                ]]
+            }
+        );
+    }
+
     register() {
         this.bot.on('message', async (msg) => {
             const chatID = msg.chat.id;
@@ -1206,6 +1313,11 @@ Telegram: ${currentUsername}`
                         }
                         console.log(`[Репорт] #${result.report.id}: уведомлено модераторов=${sent}, пропущено (заморозка)=${skippedFrozen}, всего получателей=${this.moderatorChatIDs.length}`);
                     }
+                    return;
+                }
+
+                if (user.supportPending) {
+                    await this.handleSupportMessage(chatID, user, text);
                     return;
                 }
 
@@ -1638,6 +1750,16 @@ Telegram: ${currentUsername}`
                     return;
                 }
 
+                if (text === '/help') {
+                    if (!this.profileService.isProfileComplete(chatID)) {
+                        await this.sendMessage(chatID, '❌ Сначала необходимо завершить создание анкеты.');
+                        return;
+                    }
+
+                    await this.sendMessage(chatID, this.helpText(), this.helpKeyboard());
+                    return;
+                }
+
                 if (text === '/myprofile') {
                     if (!this.profileService.isProfileComplete(chatID)) {
                         await this.sendMessage(chatID, '❌ Вы ещё не завершили создание анкеты.');
@@ -1881,6 +2003,52 @@ Telegram: ${currentUsername}`
                             '✅ Помечено как ложное срабатывание.\n\n🔐 Введите admin pin ключ 2 для подтверждения:'
                         );
                     }
+                    return;
+                }
+
+                if (data === 'help_support') {
+                    if (!this.profileService.isProfileComplete(chatID)) {
+                        await this.bot.answerCallbackQuery(query.id, {
+                            text: 'Сначала завершите создание анкеты.'
+                        }).catch(() => {});
+                        return;
+                    }
+
+                    await this.bot.answerCallbackQuery(query.id).catch(() => {});
+                    await this.bot.editMessageReplyMarkup(
+                        { inline_keyboard: [] },
+                        { chat_id: chatID, message_id: query.message.message_id }
+                    ).catch(() => {});
+
+                    await this.sendMessage(
+                        chatID,
+                        '📮 Выберите тип обращения:',
+                        this.supportTypeKeyboard()
+                    );
+                    return;
+                }
+
+                if (data === 'help_bug' || data === 'help_idea') {
+                    if (!user || !this.profileService.isProfileComplete(chatID)) {
+                        await this.bot.answerCallbackQuery(query.id, {
+                            text: 'Сначала завершите создание анкеты.'
+                        }).catch(() => {});
+                        return;
+                    }
+
+                    user.supportPending = data === 'help_bug' ? 'bug' : 'idea';
+
+                    await this.bot.answerCallbackQuery(query.id).catch(() => {});
+                    await this.bot.editMessageReplyMarkup(
+                        { inline_keyboard: [] },
+                        { chat_id: chatID, message_id: query.message.message_id }
+                    ).catch(() => {});
+
+                    const prompt = data === 'help_bug'
+                        ? '🐞 Опишите, что именно сломалось или работает неправильно. Пришлите одним сообщением.'
+                        : '💡 Опишите вашу идею или предложение по развитию сервиса. Пришлите одним сообщением.';
+
+                    await this.sendMessage(chatID, prompt, this.cancelKeyboard());
                     return;
                 }
 

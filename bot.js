@@ -254,6 +254,10 @@ class Bot {
             {
                 command: 'report',
                 description: 'Пожаловаться на анкету'
+            },
+            {
+                command: 'help',
+                description: 'Справка и поддержка'
             }
         ])
     }
