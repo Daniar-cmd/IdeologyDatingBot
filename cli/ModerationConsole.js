@@ -305,17 +305,38 @@ class ModerationConsole {
         return Boolean(user.banned)
     }
 
-    async showUsersList(account) {
-        if (!this.userRepository) {
-            this.output.write('\n❌ Не подключён репозиторий пользователей (userRepository).\n\n')
-            return
-        }
-
+    // Общий цикл постраничного просмотра для вкладок консоли: кламп страницы,
+    // вычисление offset, отрисовка, чтение команды и навигация < / > / update / 0.
+    // Команды конкретной вкладки обрабатывает handleCommand.
+    //
+    // Источник данных задаётся одним из двух способов:
+    //   fetchTotal + fetchPage(limit, offset) — страница берётся из БД;
+    //   fetchAll — список уже загружен целиком (срез делается здесь).
+    // fetchAll-вариант передаёт в handleCommand полный список (all), поэтому
+    // сквозная нумерация и команды по номерам работают как раньше.
+    async paginate(account, {
+        perPage,
+        fetchTotal = null,
+        fetchPage = null,
+        fetchAll = null,
+        render,
+        handleCommand,
+        onUpdate = null
+    }) {
         let page = 1
 
         while (true) {
-            const total = await this.userRepository.countAll()
-            const totalPages = Math.max(1, Math.ceil(total / this.USERS_PER_PAGE))
+            let all = null
+            let total
+
+            if (fetchAll) {
+                all = await fetchAll()
+                total = all.length
+            } else {
+                total = await fetchTotal()
+            }
+
+            const totalPages = Math.max(1, Math.ceil(total / perPage))
 
             if (page > totalPages) {
                 page = totalPages
@@ -325,14 +346,17 @@ class ModerationConsole {
                 page = 1
             }
 
-            const offset = (page - 1) * this.USERS_PER_PAGE
-            const users = await this.userRepository.findAll({
-                orderByCreatedAtDesc: true,
-                limit: this.USERS_PER_PAGE,
-                offset
-            })
+            const offset = (page - 1) * perPage
+            let pageItems
 
-            this.renderUsersPage(account, page, totalPages, total, users, offset)
+            if (fetchAll) {
+                pageItems = all.slice(offset, offset + perPage)
+            } else {
+                pageItems = await fetchPage(perPage, offset)
+                all = pageItems
+            }
+
+            await render(account, page, totalPages, total, pageItems, offset)
 
             const input = (await this.ask('\nВведите команду: ')).trim()
 
@@ -341,6 +365,9 @@ class ModerationConsole {
             }
 
             if (input.toLowerCase() === 'update') {
+                if (onUpdate) {
+                    await onUpdate()
+                }
                 continue
             }
 
@@ -362,15 +389,37 @@ class ModerationConsole {
                 continue
             }
 
-            const parsed = this.parseAction(input)
-
-            if (!parsed) {
-                this.output.write('❌ Неверная команда.\n')
-                continue
-            }
-
-            await this.executeAction(account, users, parsed, offset)
+            await handleCommand(input, { pageItems, all, offset, page, totalPages })
         }
+    }
+
+    async showUsersList(account) {
+        if (!this.userRepository) {
+            this.output.write('\n❌ Не подключён репозиторий пользователей (userRepository).\n\n')
+            return
+        }
+
+        await this.paginate(account, {
+            perPage: this.USERS_PER_PAGE,
+            fetchTotal: () => this.userRepository.countAll(),
+            fetchPage: (limit, offset) => this.userRepository.findAll({
+                orderByCreatedAtDesc: true,
+                limit,
+                offset
+            }),
+            render: (acc, page, totalPages, total, users, offset) =>
+                this.renderUsersPage(acc, page, totalPages, total, users, offset),
+            handleCommand: async (input, { pageItems, offset }) => {
+                const parsed = this.parseAction(input)
+
+                if (!parsed) {
+                    this.output.write('❌ Неверная команда.\n')
+                    return
+                }
+
+                await this.executeAction(account, pageItems, parsed, offset)
+            }
+        })
     }
 
     renderUsersPage(account, page, totalPages, total, users, offset) {
@@ -409,69 +458,30 @@ class ModerationConsole {
             return
         }
 
-        let page = 1
+        await this.paginate(account, {
+            perPage: this.REPORTS_PER_PAGE,
+            fetchTotal: () => this.reportService.getReportsCount(),
+            fetchPage: (limit, offset) => this.reportService.getReportsPage(limit, offset),
+            render: (acc, page, totalPages, total, reports, offset) =>
+                this.renderReportsPage(acc, page, totalPages, total, reports, offset),
+            handleCommand: async (input, { pageItems, offset }) => {
+                const readMatch = input.match(/^read\s+(\d+)$/i)
 
-        while (true) {
-            const total = await this.reportService.getReportsCount()
-            const totalPages = Math.max(1, Math.ceil(total / this.REPORTS_PER_PAGE))
-
-            if (page > totalPages) {
-                page = totalPages
-            }
-
-            if (page < 1) {
-                page = 1
-            }
-
-            const offset = (page - 1) * this.REPORTS_PER_PAGE
-            const reports = await this.reportService.getReportsPage(this.REPORTS_PER_PAGE, offset)
-
-            this.renderReportsPage(account, page, totalPages, total, reports, offset)
-
-            const input = (await this.ask('\nВведите команду: ')).trim()
-
-            if (input === '0') {
-                return
-            }
-
-            if (input.toLowerCase() === 'update') {
-                continue
-            }
-
-            if (input === '<') {
-                if (page <= 1) {
-                    this.output.write('❌ Это первая страница.\n')
-                } else {
-                    page -= 1
+                if (readMatch) {
+                    await this.showReportCard(Number(readMatch[1]), pageItems, offset)
+                    return
                 }
-                continue
-            }
 
-            if (input === '>') {
-                if (page >= totalPages) {
-                    this.output.write('❌ Это последняя страница.\n')
-                } else {
-                    page += 1
+                const sendMatch = input.match(/^send\s+(\d+)\s+(\S+)$/i)
+
+                if (sendMatch) {
+                    await this.sendReportByNumber(account, Number(sendMatch[1]), sendMatch[2], pageItems, offset)
+                    return
                 }
-                continue
+
+                this.output.write('❌ Неверная команда.\n')
             }
-
-            const readMatch = input.match(/^read\s+(\d+)$/i)
-
-            if (readMatch) {
-                await this.showReportCard(Number(readMatch[1]), reports, offset)
-                continue
-            }
-
-            const sendMatch = input.match(/^send\s+(\d+)\s+(\S+)$/i)
-
-            if (sendMatch) {
-                await this.sendReportByNumber(account, Number(sendMatch[1]), sendMatch[2], reports, offset)
-                continue
-            }
-
-            this.output.write('❌ Неверная команда.\n')
-        }
+        })
     }
 
     renderReportsPage(account, page, totalPages, total, reports, offset) {
@@ -652,82 +662,40 @@ class ModerationConsole {
             return
         }
 
-        let page = 1
+        await this.paginate(account, {
+            perPage: this.BANNED_PER_PAGE,
+            fetchTotal: () => this.userRepository.countBanned(),
+            fetchPage: (limit, offset) => this.userRepository.findBanned({ limit, offset }),
+            render: (acc, page, totalPages, total, users, offset) =>
+                this.renderBannedPage(acc, page, totalPages, total, users, offset),
+            handleCommand: async (input, { pageItems, offset }) => {
+                const parsed = this.parseBannedAction(input)
 
-        while (true) {
-            const total = await this.userRepository.countBanned()
-            const totalPages = Math.max(1, Math.ceil(total / this.BANNED_PER_PAGE))
-
-            if (page > totalPages) {
-                page = totalPages
-            }
-
-            if (page < 1) {
-                page = 1
-            }
-
-            const offset = (page - 1) * this.BANNED_PER_PAGE
-            const pageItems = await this.userRepository.findBanned({
-                limit: this.BANNED_PER_PAGE,
-                offset
-            })
-
-            this.renderBannedPage(account, page, totalPages, total, pageItems, offset)
-
-            const input = (await this.ask('\nВведите команду: ')).trim()
-
-            if (input === '0') {
-                return
-            }
-
-            if (input.toLowerCase() === 'update') {
-                continue
-            }
-
-            if (input === '<') {
-                if (page <= 1) {
-                    this.output.write('❌ Это первая страница.\n')
-                } else {
-                    page -= 1
+                if (!parsed) {
+                    this.output.write('❌ Неверная команда.\n')
+                    return
                 }
-                continue
-            }
 
-            if (input === '>') {
-                if (page >= totalPages) {
-                    this.output.write('❌ Это последняя страница.\n')
-                } else {
-                    page += 1
+                const target = pageItems[parsed.number - offset - 1]
+
+                if (!target) {
+                    this.output.write('❌ Нет пользователя с таким номером.\n')
+                    return
                 }
-                continue
+
+                if (parsed.command === 'read') {
+                    await this.showBanCard(target)
+                    return
+                }
+
+                if (!this.moderationActions) {
+                    this.output.write('❌ Не подключён сервис модерации (moderationActions).\n')
+                    return
+                }
+
+                await this.executeBannedAction(account, target, parsed)
             }
-
-            const parsed = this.parseBannedAction(input)
-
-            if (!parsed) {
-                this.output.write('❌ Неверная команда.\n')
-                continue
-            }
-
-            const target = pageItems[parsed.number - offset - 1]
-
-            if (!target) {
-                this.output.write('❌ Нет пользователя с таким номером.\n')
-                continue
-            }
-
-            if (parsed.command === 'read') {
-                await this.showBanCard(target)
-                continue
-            }
-
-            if (!this.moderationActions) {
-                this.output.write('❌ Не подключён сервис модерации (moderationActions).\n')
-                continue
-            }
-
-            await this.executeBannedAction(account, target, parsed)
-        }
+        })
     }
 
     renderBannedPage(account, page, totalPages, total, users, offset) {
@@ -879,65 +847,23 @@ class ModerationConsole {
             return
         }
 
-        let page = 1
+        await this.paginate(account, {
+            perPage: this.HISTORY_PER_PAGE,
+            fetchTotal: () => this.moderationActionRepository.countAll(),
+            fetchPage: (limit, offset) => this.moderationActionRepository.getPage({ limit, offset }),
+            render: (acc, page, totalPages, total, entries, offset) =>
+                this.renderHistoryPage(acc, page, totalPages, total, entries, offset),
+            handleCommand: async (input, { pageItems, offset }) => {
+                const readMatch = input.match(/^read\s+(\d+)$/i)
 
-        while (true) {
-            const total = await this.moderationActionRepository.countAll()
-            const totalPages = Math.max(1, Math.ceil(total / this.HISTORY_PER_PAGE))
-
-            if (page > totalPages) {
-                page = totalPages
-            }
-
-            if (page < 1) {
-                page = 1
-            }
-
-            const offset = (page - 1) * this.HISTORY_PER_PAGE
-            const entries = await this.moderationActionRepository.getPage({
-                limit: this.HISTORY_PER_PAGE,
-                offset
-            })
-
-            this.renderHistoryPage(account, page, totalPages, total, entries, offset)
-
-            const input = (await this.ask('\nВведите команду: ')).trim()
-
-            if (input === '0') {
-                return
-            }
-
-            if (input.toLowerCase() === 'update') {
-                continue
-            }
-
-            if (input === '<') {
-                if (page <= 1) {
-                    this.output.write('❌ Это первая страница.\n')
-                } else {
-                    page -= 1
+                if (readMatch) {
+                    await this.showHistoryCard(Number(readMatch[1]), pageItems, offset)
+                    return
                 }
-                continue
+
+                this.output.write('❌ Неверная команда.\n')
             }
-
-            if (input === '>') {
-                if (page >= totalPages) {
-                    this.output.write('❌ Это последняя страница.\n')
-                } else {
-                    page += 1
-                }
-                continue
-            }
-
-            const readMatch = input.match(/^read\s+(\d+)$/i)
-
-            if (readMatch) {
-                await this.showHistoryCard(Number(readMatch[1]), entries, offset)
-                continue
-            }
-
-            this.output.write('❌ Неверная команда.\n')
-        }
+        })
     }
 
     renderHistoryPage(account, page, totalPages, total, entries, offset) {
@@ -1166,94 +1092,54 @@ class ModerationConsole {
             return
         }
 
-        let page = 1
+        await this.paginate(account, {
+            perPage: this.MODERATORS_PER_PAGE,
+            fetchAll: () => this.loadModeratorEntries(),
+            render: async (acc, page, totalPages, total, entries, offset) => {
+                const pendingInvites = await this.moderatorService.listPendingInvites()
+                this.renderModeratorsPage(acc, page, totalPages, total, entries, offset, pendingInvites)
+            },
+            handleCommand: async (input, { all }) => {
+                const inviteMatch = input.match(/^invite\s+(-?\d+)$/i)
 
-        while (true) {
-            const entries = await this.loadModeratorEntries()
-            const total = entries.length
-            const totalPages = Math.max(1, Math.ceil(total / this.MODERATORS_PER_PAGE))
-
-            if (page > totalPages) {
-                page = totalPages
-            }
-
-            if (page < 1) {
-                page = 1
-            }
-
-            const offset = (page - 1) * this.MODERATORS_PER_PAGE
-            const pageItems = entries.slice(offset, offset + this.MODERATORS_PER_PAGE)
-            const pendingInvites = await this.moderatorService.listPendingInvites()
-
-            this.renderModeratorsPage(account, page, totalPages, total, pageItems, offset, pendingInvites)
-
-            const input = (await this.ask('\nВведите команду: ')).trim()
-
-            if (input === '0') {
-                return
-            }
-
-            if (input.toLowerCase() === 'update') {
-                continue
-            }
-
-            if (input === '<') {
-                if (page <= 1) {
-                    this.output.write('❌ Это первая страница.\n')
-                } else {
-                    page -= 1
-                }
-                continue
-            }
-
-            if (input === '>') {
-                if (page >= totalPages) {
-                    this.output.write('❌ Это последняя страница.\n')
-                } else {
-                    page += 1
-                }
-                continue
-            }
-
-            const inviteMatch = input.match(/^invite\s+(-?\d+)$/i)
-
-            if (inviteMatch) {
-                await this.inviteModerator(account, parseInt(inviteMatch[1], 10), entries)
-                continue
-            }
-
-            const readMatch = input.match(/^read\s+(\d+)$/i)
-
-            if (readMatch) {
-                const target = entries[parseInt(readMatch[1], 10) - 1]
-
-                if (!target) {
-                    this.output.write('❌ Нет модератора с таким номером.\n')
-                    continue
+                if (inviteMatch) {
+                    await this.inviteModerator(account, parseInt(inviteMatch[1], 10), all)
+                    return
                 }
 
-                await this.showModeratorCard(target)
-                continue
-            }
+                const readMatch = input.match(/^read\s+(\d+)$/i)
 
-            const removeMatch = input.match(/^remove\s+(\d+)$/i)
+                if (readMatch) {
+                    const target = all[parseInt(readMatch[1], 10) - 1]
 
-            if (removeMatch) {
-                const value = parseInt(removeMatch[1], 10)
-                // Сначала пробуем как chat_id, иначе — как номер строки списка
-                const target = entries.find(entry => entry.chatID === value) || entries[value - 1]
+                    if (!target) {
+                        this.output.write('❌ Нет модератора с таким номером.\n')
+                        return
+                    }
 
-                if (!target) {
-                    this.output.write('❌ Нет модератора с таким номером/chat_id.\n')
-                    continue
+                    await this.showModeratorCard(target)
+                    return
                 }
 
-                await this.removeModerator(account, target)
-                continue
-            }
+                const removeMatch = input.match(/^remove\s+(\d+)$/i)
 
-            this.output.write('❌ Неверная команда.\n')
-        }
+                if (removeMatch) {
+                    const value = parseInt(removeMatch[1], 10)
+                    // Сначала пробуем как chat_id, иначе — как номер строки списка
+                    const target = all.find(entry => entry.chatID === value) || all[value - 1]
+
+                    if (!target) {
+                        this.output.write('❌ Нет модератора с таким номером/chat_id.\n')
+                        return
+                    }
+
+                    await this.removeModerator(account, target)
+                    return
+                }
+
+                this.output.write('❌ Неверная команда.\n')
+            }
+        })
     }
 
     renderModeratorsPage(account, page, totalPages, total, entries, offset, pendingInvites) {
@@ -1407,68 +1293,30 @@ class ModerationConsole {
         }
 
         let entries = loaded.entries
-        let page = 1
 
-        while (true) {
-            const total = entries.length
-            const totalPages = Math.max(1, Math.ceil(total / this.DEV_HISTORY_PER_PAGE))
-
-            if (page > totalPages) {
-                page = totalPages
-            }
-
-            if (page < 1) {
-                page = 1
-            }
-
-            const offset = (page - 1) * this.DEV_HISTORY_PER_PAGE
-            const slice = entries.slice(offset, offset + this.DEV_HISTORY_PER_PAGE)
-
-            this.renderDevHistoryPage(account, page, totalPages, total, slice, offset)
-
-            const input = (await this.ask('\nВведите команду: ')).trim()
-
-            if (input === '0') {
-                return
-            }
-
-            if (input.toLowerCase() === 'update') {
+        await this.paginate(account, {
+            perPage: this.DEV_HISTORY_PER_PAGE,
+            fetchAll: () => entries,
+            onUpdate: () => {
                 const refreshed = this.devHistoryService.list()
 
                 if (refreshed.success) {
                     entries = refreshed.entries
                 }
+            },
+            render: (acc, page, totalPages, total, slice, offset) =>
+                this.renderDevHistoryPage(acc, page, totalPages, total, slice, offset),
+            handleCommand: async (input, { all, offset }) => {
+                const readMatch = input.match(/^read\s+(\d+)$/i)
 
-                continue
-            }
-
-            if (input === '<') {
-                if (page <= 1) {
-                    this.output.write('❌ Это первая страница.\n')
-                } else {
-                    page -= 1
+                if (readMatch) {
+                    await this.showDevHistoryCard(Number(readMatch[1]), all, offset)
+                    return
                 }
-                continue
+
+                this.output.write('❌ Неверная команда. Доступно: read N | < | > | update | 0.\n')
             }
-
-            if (input === '>') {
-                if (page >= totalPages) {
-                    this.output.write('❌ Это последняя страница.\n')
-                } else {
-                    page += 1
-                }
-                continue
-            }
-
-            const readMatch = input.match(/^read\s+(\d+)$/i)
-
-            if (readMatch) {
-                await this.showDevHistoryCard(Number(readMatch[1]), entries, offset)
-                continue
-            }
-
-            this.output.write('❌ Неверная команда. Доступно: read N | < | > | update | 0.\n')
-        }
+        })
     }
 
     renderDevHistoryPage(account, page, totalPages, total, entries, offset) {
@@ -1571,67 +1419,28 @@ class ModerationConsole {
             return
         }
 
-        let page = 1
+        await this.paginate(account, {
+            perPage: this.TICKETS_PER_PAGE,
+            fetchTotal: () => this.supportTicketService.getTicketsCount(),
+            fetchPage: (limit, offset) => this.supportTicketService.getTicketsPage(limit, offset),
+            render: (acc, page, totalPages, total, tickets, offset) =>
+                this.renderTicketsPage(acc, page, totalPages, total, tickets, offset),
+            handleCommand: async (input, { pageItems, offset }) => {
+                const parsed = this.parseTicketCommand(input)
 
-        while (true) {
-            const total = await this.supportTicketService.getTicketsCount()
-            const totalPages = Math.max(1, Math.ceil(total / this.TICKETS_PER_PAGE))
-
-            if (page > totalPages) {
-                page = totalPages
-            }
-
-            if (page < 1) {
-                page = 1
-            }
-
-            const offset = (page - 1) * this.TICKETS_PER_PAGE
-            const tickets = await this.supportTicketService.getTicketsPage(this.TICKETS_PER_PAGE, offset)
-
-            this.renderTicketsPage(account, page, totalPages, total, tickets, offset)
-
-            const input = (await this.ask('\nВведите команду: ')).trim()
-
-            if (input === '0') {
-                return
-            }
-
-            if (input.toLowerCase() === 'update') {
-                continue
-            }
-
-            if (input === '<') {
-                if (page <= 1) {
-                    this.output.write('❌ Это первая страница.\n')
-                } else {
-                    page -= 1
+                if (!parsed) {
+                    this.output.write('❌ Неверная команда. Доступно: read N | reply N "текст" | < | > | 0.\n')
+                    return
                 }
-                continue
-            }
 
-            if (input === '>') {
-                if (page >= totalPages) {
-                    this.output.write('❌ Это последняя страница.\n')
-                } else {
-                    page += 1
+                if (parsed.command === 'read') {
+                    await this.showTicketCard(account, parsed.number, pageItems, offset)
+                    return
                 }
-                continue
+
+                await this.replyTicket(account, parsed.number, parsed.text, pageItems, offset)
             }
-
-            const parsed = this.parseTicketCommand(input)
-
-            if (!parsed) {
-                this.output.write('❌ Неверная команда. Доступно: read N | reply N "текст" | < | > | 0.\n')
-                continue
-            }
-
-            if (parsed.command === 'read') {
-                await this.showTicketCard(account, parsed.number, tickets, offset)
-                continue
-            }
-
-            await this.replyTicket(account, parsed.number, parsed.text, tickets, offset)
-        }
+        })
     }
 
     renderTicketsPage(account, page, totalPages, total, tickets, offset) {
