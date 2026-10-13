@@ -4,7 +4,7 @@ const crypto = require('crypto')
 // Консольная админ-панель: вход по имени администратора и его личному паролю,
 // далее — локальное меню. Действия выполняются через ModerationActionsService.
 class ModerationConsole {
-    constructor({ input, output, accounts = [], userRepository = null, moderationActions = null, reportService = null, notifier = null, moderatorChatIDs = [], moderationActionRepository = null, moderatorService = null, supportTicketService = null }) {
+    constructor({ input, output, accounts = [], userRepository = null, moderationActions = null, reportService = null, notifier = null, moderatorChatIDs = [], moderationActionRepository = null, moderatorService = null, supportTicketService = null, devHistoryService = null }) {
         this.input = input
         this.output = output
         // Имена администраторов сравниваем без учёта регистра
@@ -22,6 +22,7 @@ class ModerationConsole {
         this.moderationActionRepository = moderationActionRepository
         this.moderatorService = moderatorService
         this.supportTicketService = supportTicketService
+        this.devHistoryService = devHistoryService
         this.muted = false
 
         this.rl = readline.createInterface({
@@ -58,6 +59,7 @@ class ModerationConsole {
         this.HISTORY_PER_PAGE = 50
         this.MODERATORS_PER_PAGE = 50
         this.TICKETS_PER_PAGE = 50
+        this.DEV_HISTORY_PER_PAGE = 50
     }
 
     close() {
@@ -140,7 +142,12 @@ class ModerationConsole {
                 continue
             }
 
-            // Пункт 6 зарезервирован под следующий раздел
+            // Пункт 6 — история разработки
+            if (choice === '6') {
+                await this.showDevHistoryList(account)
+                continue
+            }
+
             if (choice === '7') {
                 await this.showTicketsList(account)
                 continue
@@ -152,7 +159,7 @@ class ModerationConsole {
                 continue
             }
 
-            this.output.write('❌ Неверный пункт. Выберите 1–5, 7 или 0.\n\n')
+            this.output.write('❌ Неверный пункт. Выберите 1–7 или 0.\n\n')
         }
     }
 
@@ -190,6 +197,7 @@ class ModerationConsole {
         this.output.write('3. Заблокированные пользователи\n')
         this.output.write('4. История администрирования\n')
         this.output.write('5. Модераторы\n')
+        this.output.write('6. История разработки\n')
         this.output.write('7. Тикеты\n')
         this.output.write('0. Выход.\n')
     }
@@ -1362,6 +1370,178 @@ class ModerationConsole {
         }
 
         this.output.write(`Личные admin-ключи: ${entry.hasPins ? 'установлены' : 'нет (общие из .env)'}\n`)
+        this.output.write('\n')
+    }
+
+    // ── История разработки ────────────────────────────────────────────────────
+
+    async showDevHistoryList(account) {
+        if (!this.devHistoryService) {
+            this.output.write('\n❌ Не подключён сервис истории разработки (devHistoryService).\n\n')
+            return
+        }
+
+        const loaded = this.devHistoryService.list()
+
+        if (!loaded.success) {
+            this.output.write(`\n❌ ${loaded.message}\n\n`)
+            return
+        }
+
+        let entries = loaded.entries
+        let page = 1
+
+        while (true) {
+            const total = entries.length
+            const totalPages = Math.max(1, Math.ceil(total / this.DEV_HISTORY_PER_PAGE))
+
+            if (page > totalPages) {
+                page = totalPages
+            }
+
+            if (page < 1) {
+                page = 1
+            }
+
+            const offset = (page - 1) * this.DEV_HISTORY_PER_PAGE
+            const slice = entries.slice(offset, offset + this.DEV_HISTORY_PER_PAGE)
+
+            this.renderDevHistoryPage(account, page, totalPages, total, slice, offset)
+
+            const input = (await this.ask('\nВведите команду: ')).trim()
+
+            if (input === '0') {
+                return
+            }
+
+            if (input.toLowerCase() === 'update') {
+                const refreshed = this.devHistoryService.list()
+
+                if (refreshed.success) {
+                    entries = refreshed.entries
+                }
+
+                continue
+            }
+
+            if (input === '<') {
+                if (page <= 1) {
+                    this.output.write('❌ Это первая страница.\n')
+                } else {
+                    page -= 1
+                }
+                continue
+            }
+
+            if (input === '>') {
+                if (page >= totalPages) {
+                    this.output.write('❌ Это последняя страница.\n')
+                } else {
+                    page += 1
+                }
+                continue
+            }
+
+            const readMatch = input.match(/^read\s+(\d+)$/i)
+
+            if (readMatch) {
+                await this.showDevHistoryCard(Number(readMatch[1]), entries, offset)
+                continue
+            }
+
+            this.output.write('❌ Неверная команда. Доступно: read N | < | > | update | 0.\n')
+        }
+    }
+
+    renderDevHistoryPage(account, page, totalPages, total, entries, offset) {
+        const border = '='.repeat(40)
+        this.output.write(`\n${border}\n`)
+        this.output.write('=== IdeologyDatingBot | Dev History ===\n')
+        this.output.write(`${border}\n`)
+        this.output.write(`Админ: ${account.name}\n`)
+        this.output.write(`Страница: ${page}/${totalPages} | Всего: ${total}\n\n`)
+
+        if (entries.length === 0) {
+            this.output.write('Записей пока нет.\n\n')
+        } else {
+            entries.forEach((entry, index) => {
+                const num = offset + index + 1
+                const date = this.formatDateTime(entry.date)
+
+                this.output.write(`[${num}] ${entry.hash} | ${date} | ${entry.subject}\n`)
+            })
+        }
+
+        this.output.write('\nНавигация:\n')
+        this.output.write('<  — предыдущая страница | >  — следующая страница | 0 — главное меню\n')
+        this.output.write('read N — открыть запись | update — обновить историю\n')
+    }
+
+    devHistoryKindLabel(kind) {
+        if (kind === 'version') {
+            return 'Версия'
+        }
+
+        if (kind === 'commit') {
+            return 'Коммит'
+        }
+
+        return 'Запись'
+    }
+
+    resolveDevHistoryByNumber(number, entries, offset) {
+        if (!Number.isInteger(number) || number < 1) {
+            return null
+        }
+
+        const index = number - offset - 1
+
+        if (index >= 0 && index < entries.length) {
+            return entries[index]
+        }
+
+        return entries[number - 1] || null
+    }
+
+    // read N — открыть запись: полное описание коммита.
+    async showDevHistoryCard(number, entries, offset) {
+        const entry = this.resolveDevHistoryByNumber(number, entries, offset)
+
+        if (!entry) {
+            this.output.write('❌ Нет записи с таким номером.\n')
+            return
+        }
+
+        while (true) {
+            this.renderDevHistoryDetails(entry)
+            this.output.write('0 — назад к истории разработки\n')
+
+            const input = (await this.ask('\nВведите команду: ')).trim()
+
+            if (input === '0') {
+                return
+            }
+
+            this.output.write('❌ Неверная команда. Доступно: 0 — назад.\n')
+        }
+    }
+
+    renderDevHistoryDetails(entry) {
+        const border = '='.repeat(40)
+
+        this.output.write(`\n${border}\n`)
+        this.output.write(`=== Запись разработки #${entry.number} ===\n`)
+        this.output.write(`${border}\n`)
+        this.output.write(`Тип: ${this.devHistoryKindLabel(entry.kind)}\n`)
+        this.output.write(`Хэш: ${entry.hash}\n`)
+        this.output.write(`Автор: ${entry.author || '—'}\n`)
+        this.output.write(`Дата: ${this.formatDateTime(entry.date)}\n`)
+        this.output.write(`\nОписание:\n${entry.subject || '—'}\n`)
+
+        if (entry.body) {
+            this.output.write(`\n${entry.body}\n`)
+        }
+
         this.output.write('\n')
     }
 

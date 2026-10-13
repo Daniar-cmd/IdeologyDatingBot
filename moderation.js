@@ -8,6 +8,7 @@ const ModerationActionsService = require('./services/ModerationActionsService')
 const ModeratorService = require('./services/ModeratorService')
 const ReportService = require('./services/ReportService')
 const SupportTicketService = require('./services/SupportTicketService')
+const DevHistoryService = require('./services/DevHistoryService')
 const User = require('./models/user')
 const UserRepository = require('./repositories/UserRepository')
 const ModerationActionRepository = require('./repositories/ModerationActionRepository')
@@ -134,6 +135,8 @@ async function main() {
     const supportTicketRepository = new SupportTicketRepository(db)
     const supportTicketService = new SupportTicketService(supportTicketRepository)
 
+    const devHistoryService = new DevHistoryService()
+
     const moderatorService = new ModeratorService(moderatorRepository)
 
     // Один и тот же Telegram-клиент (без поллинга) используется для уведомлений
@@ -157,7 +160,8 @@ async function main() {
         moderatorChatIDs: parseModeratorIDs(process.env.MODERATORSID),
         moderationActionRepository,
         moderatorService,
-        supportTicketService
+        supportTicketService,
+        devHistoryService
     })
 
     let ok = false
