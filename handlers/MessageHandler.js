@@ -934,12 +934,14 @@ Telegram: ${currentUsername}`
             return;
         }
 
-        // Лайк вместе с сообщением.
+        // Лайк вместе с сообщением. Мэтч возникает только при взаимном лайке —
+        // ровно как у обычного ❤️. Иначе получатель получает обычное
+        // уведомление и решает сам, ответить взаимностью или нет.
         const like = this.likeService.sendLike(chatID, target);
 
         if (like.success && like.isMatch) {
             await this.celebrateMatch(chatID, target);
-        } else if (like.success && !like.alreadyLiked) {
+        } else if (like.success) {
             await this.notifyUserLike(chatID, target);
         }
 

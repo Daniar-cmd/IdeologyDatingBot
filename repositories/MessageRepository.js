@@ -15,6 +15,15 @@ class MessageRepository {
         return result.rows[0]
     }
 
+    // Удаляет все сообщения пользователя (как отправленные, так и полученные).
+    // Используется при пересоздании анкеты: история должна обнулиться.
+    async deleteForUser(chatID) {
+        await this.db.query(
+            `DELETE FROM messages WHERE from_chat_id = $1 OR to_chat_id = $1`,
+            [String(chatID)]
+        )
+    }
+
     // Сообщения от одного пользователя другому в хронологическом порядке.
     async listFromTo(fromChatID, toChatID, limit = 20) {
         const result = await this.db.query(

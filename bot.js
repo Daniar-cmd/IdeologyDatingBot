@@ -43,17 +43,19 @@ class Bot {
         this.matchingService = new MatchingService(this.users, this.cityService)
         this.profileService = new ProfileService(this.users)
 
+        this.messageService = new MessageService(this.messageRepository)
+
         this.registrationService = new RegistrationService(
             this.users,
             User,
             process.env.INVITE_CODE || 'YABLOKO',
             this.cityService,
-            this.contentFilter
+            this.contentFilter,
+            this.messageService
         )
 
         this.reportService = new ReportService(this.reportRepository)
         this.moderatorService = new ModeratorService(this.moderatorRepository)
-        this.messageService = new MessageService(this.messageRepository)
 
         this.moderatorChatIDs = parseModeratorIDs(process.env.MODERATORSID || process.env.REPORT_CHAT_IDS)
 

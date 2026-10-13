@@ -38,6 +38,11 @@ class MessageService {
     async getMessagesFrom(fromChatID, toChatID, limit = 20) {
         return this.messages.listFromTo(fromChatID, toChatID, limit)
     }
+
+    // Стирает всю историю сообщений пользователя (при пересоздании анкеты).
+    async deleteForUser(chatID) {
+        return this.messages.deleteForUser(chatID)
+    }
 }
 
 module.exports = MessageService

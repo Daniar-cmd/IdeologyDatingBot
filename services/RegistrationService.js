@@ -1,10 +1,49 @@
 class RegistrationService {
-constructor(users, User, inviteCode, cityService, contentFilter) {
+constructor(users, User, inviteCode, cityService, contentFilter, messageService = null) {
 this.users = users
 this.User = User
 this.inviteCode = inviteCode
 this.cityService = cityService
 this.contentFilter = contentFilter
+this.messageService = messageService
+}
+
+// Полный сброс истории знакомств. Пользователь и все остальные забывают
+// взаимные лайки, просмотры и мэтчи: после пересоздания анкеты для них
+// всё должно быть «как в первый раз».
+clearDatingHistory(chatID) {
+    const id = Number(chatID)
+    const user = this.users[id]
+
+    if (user) {
+        user.likes = []
+        user.likedBy = []
+        user.viewed = []
+        user.matches = []
+    }
+
+    const withoutUser = (list) => Array.isArray(list)
+        ? list.filter(item => Number(item) !== id)
+        : []
+
+    for (const other of Object.values(this.users)) {
+        if (!other || Number(other.chatID) === id) {
+            continue
+        }
+
+        other.likes = withoutUser(other.likes)
+        other.likedBy = withoutUser(other.likedBy)
+        other.viewed = withoutUser(other.viewed)
+        other.matches = withoutUser(other.matches)
+    }
+
+    // Сообщения, прикреплённые к лайкам, тоже стираются: они были частью
+    // прежней истории пользователя.
+    if (this.messageService && typeof this.messageService.deleteForUser === 'function') {
+        this.messageService.deleteForUser(id).catch(error => {
+            console.error('Ошибка очистки сообщений пользователя:', error.message)
+        })
+    }
 }
 
 getOrCreateUser(chatID, username = null) {
@@ -40,8 +79,9 @@ restartRegistration(chatID) {
     user.isGlobal = false
     user.photos = []
 
-    // Возвращаем в ленту ранее лайкнутые/пропущенные анкеты.
-    user.viewed = []
+    // Полностью забываем прежнюю историю знакомств (лайки/мэтчи/просмотры)
+    // и у пользователя, и у всех, кто с ним взаимодействовал.
+    this.clearDatingHistory(chatID)
 
     user.waitingForInvite = false
     user.waitingForGender = false
@@ -58,6 +98,9 @@ restartRegistration(chatID) {
     }
 }
 startRegistration(chatID, username = null) {
+    // /start пересоздаёт анкету: прежние лайки/мэтчи не должны тянуться за пользователем.
+    this.clearDatingHistory(chatID)
+
     const user = new this.User({
         chatID: Number(chatID),
         username,
