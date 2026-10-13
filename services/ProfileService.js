@@ -10,23 +10,6 @@ isProfileComplete(chatID) {
     const user = this.getProfile(chatID)
     return Boolean(user && user.isProfileComplete())
 }
-getProfileForDating(chatID, otherChatID) {
-    const currentUser = this.getProfile(chatID)
-    const otherUser = this.getProfile(otherChatID)
-    if (!currentUser || !otherUser) {
-        return null
-    }
-    if (!otherUser.registered || !otherUser.isProfileComplete()) {
-        return null
-    }
-    if (otherUser.banned) {
-        return null
-    }
-    if (Number(chatID) === Number(otherChatID)) {
-        return null
-    }
-    return otherUser
-}
 
 hideFromSearch(chatID) {
     const user = this.getProfile(chatID)

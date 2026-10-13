@@ -1,3 +1,38 @@
+// Колонки анкеты для upsert. Порядок обязан совпадать с buildRow.
+const USER_COLUMNS = [
+    'chat_id', 'username', 'registered', 'name', 'gender', 'age',
+    'description', 'city', 'is_global', 'hidden', 'banned', 'banned_until',
+    'warnings', 'photos', 'likes', 'liked_by', 'viewed', 'matches',
+    'state', 'looking_for'
+].join(', ')
+
+// При конфликте обновляем всё, кроме полей модерации
+// (banned / banned_until / warnings): их намеренно меняет только
+// setModerationState, чтобы автосохранение анкет не перезатирало
+// баны и варны устаревшим состоянием из памяти.
+const USER_UPDATE_SET = [
+    'username = EXCLUDED.username',
+    'registered = EXCLUDED.registered',
+    'name = EXCLUDED.name',
+    'gender = EXCLUDED.gender',
+    'age = EXCLUDED.age',
+    'description = EXCLUDED.description',
+    'city = EXCLUDED.city',
+    'is_global = EXCLUDED.is_global',
+    'hidden = EXCLUDED.hidden',
+    'photos = EXCLUDED.photos',
+    'likes = EXCLUDED.likes',
+    'liked_by = EXCLUDED.liked_by',
+    'viewed = EXCLUDED.viewed',
+    'matches = EXCLUDED.matches',
+    'state = EXCLUDED.state',
+    'looking_for = EXCLUDED.looking_for'
+].join(', ')
+
+// Максимум строк в одном батч-upsert: 200 × 20 = 4000 параметров,
+// с запасом ниже лимита PostgreSQL (65535).
+const SAVE_BATCH_SIZE = 200
+
 class UserRepository {
     constructor(db, User) {
         this.db = db
@@ -7,11 +42,6 @@ class UserRepository {
     async findAll({ orderByCreatedAtDesc = false, limit, offset } = {}) {
         const params = []
         let query = 'SELECT * FROM users'
-        const conditions = []
-
-        if (orderByCreatedAtDesc) {
-            conditions.push('1=1')
-        }
 
         const baseOrder = orderByCreatedAtDesc ? 'ORDER BY created_at DESC NULLS LAST, chat_id DESC' : 'ORDER BY chat_id ASC'
 
@@ -66,58 +96,16 @@ class UserRepository {
         })
     }
 
-    async save(user) {
+    // Преобразует модель пользователя в массив значений для upsert.
+    // Порядок строго совпадает с USER_COLUMNS.
+    buildRow(user) {
         const state = Object.keys(user).find(
             key =>
                 key.startsWith('waitingFor') &&
                 user[key] === true
         ) || null
 
-        await this.db.query(`
-            INSERT INTO users (
-                chat_id,
-                username,
-                registered,
-                name,
-                gender,
-                age,
-                description,
-                city,
-                is_global,
-                hidden,
-                banned,
-                banned_until,
-                warnings,
-                photos,
-                likes,
-                liked_by,
-                viewed,
-                matches,
-                state,
-                looking_for
-            )
-            VALUES (
-                $1, $2, $3, $4, $5, $6, $7,
-                $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
-            )
-            ON CONFLICT (chat_id) DO UPDATE SET
-                username = EXCLUDED.username,
-                registered = EXCLUDED.registered,
-                name = EXCLUDED.name,
-                gender = EXCLUDED.gender,
-                age = EXCLUDED.age,
-                description = EXCLUDED.description,
-                city = EXCLUDED.city,
-                is_global = EXCLUDED.is_global,
-                hidden = EXCLUDED.hidden,
-                photos = EXCLUDED.photos,
-                likes = EXCLUDED.likes,
-                liked_by = EXCLUDED.liked_by,
-                viewed = EXCLUDED.viewed,
-                matches = EXCLUDED.matches,
-                state = EXCLUDED.state,
-                looking_for = EXCLUDED.looking_for
-        `, [
+        return [
             String(user.chatID),
             user.username || null,
             user.registered ? 1 : 0,
@@ -138,7 +126,18 @@ class UserRepository {
             JSON.stringify(user.matches || []),
             state,
             user.lookingFor || null
-        ])
+        ]
+    }
+
+    async save(user) {
+        const values = this.buildRow(user)
+        const placeholders = values.map((_, index) => `$${index + 1}`).join(', ')
+
+        await this.db.query(`
+            INSERT INTO users (${USER_COLUMNS})
+            VALUES (${placeholders})
+            ON CONFLICT (chat_id) DO UPDATE SET ${USER_UPDATE_SET}
+        `, values)
     }
 
     // Обновляет только поля модерации. Используется консолью и Telegram-модерацией,
@@ -180,9 +179,29 @@ class UserRepository {
         }))
     }
 
+    // Сохраняет всех пользователей одним батч-upsert вместо отдельного
+    // запроса на каждого: с удалённой БД цикл автосохранения раз в 5 секунд
+    // раньше заметно нагружал соединение и рос линейно по числу анкет.
     async saveAll(users) {
-        for (const user of Object.values(users)) {
-            await this.save(user)
+        const list = Object.values(users)
+
+        for (let start = 0; start < list.length; start += SAVE_BATCH_SIZE) {
+            const chunk = list.slice(start, start + SAVE_BATCH_SIZE)
+            const params = []
+            const tuples = chunk.map(user => {
+                const placeholders = this.buildRow(user).map(value => {
+                    params.push(value)
+                    return `$${params.length}`
+                })
+
+                return `(${placeholders.join(', ')})`
+            })
+
+            await this.db.query(`
+                INSERT INTO users (${USER_COLUMNS})
+                VALUES ${tuples.join(', ')}
+                ON CONFLICT (chat_id) DO UPDATE SET ${USER_UPDATE_SET}
+            `, params)
         }
     }
 }

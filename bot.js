@@ -300,4 +300,3 @@ class Bot {
 }
 
 module.exports = Bot
-module.exports.parseModeratorIDs = parseModeratorIDs
