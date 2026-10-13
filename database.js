@@ -87,6 +87,35 @@ async function initDatabase() {
             ADD COLUMN IF NOT EXISTS resolved_reason TEXT
         `)
 
+        // Обращения пользователей в поддержку (тикеты из команды /help)
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS support_tickets (
+                id SERIAL PRIMARY KEY,
+                user_chat_id TEXT NOT NULL,
+                username TEXT,
+                type TEXT NOT NULL,
+                message TEXT NOT NULL,
+                status TEXT DEFAULT 'new',
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                read_at TIMESTAMPTZ,
+                read_by TEXT,
+                replied_at TIMESTAMPTZ,
+                replied_by TEXT,
+                reply_text TEXT
+            )
+        `)
+
+        // Добавляем колонки для уже существующих таблиц (без разрушения данных)
+        await db.query(`
+            ALTER TABLE support_tickets
+            ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'new',
+            ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ,
+            ADD COLUMN IF NOT EXISTS read_by TEXT,
+            ADD COLUMN IF NOT EXISTS replied_at TIMESTAMPTZ,
+            ADD COLUMN IF NOT EXISTS replied_by TEXT,
+            ADD COLUMN IF NOT EXISTS reply_text TEXT
+        `)
+
         // Заморозка модераторов за неверные admin-ключи
         await db.query(`
             CREATE TABLE IF NOT EXISTS moderator_freezes (

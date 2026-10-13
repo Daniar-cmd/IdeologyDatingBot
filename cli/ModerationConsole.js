@@ -4,7 +4,7 @@ const crypto = require('crypto')
 // Консольная админ-панель: вход по имени администратора и его личному паролю,
 // далее — локальное меню. Действия выполняются через ModerationActionsService.
 class ModerationConsole {
-    constructor({ input, output, accounts = [], userRepository = null, moderationActions = null, reportService = null, notifier = null, moderatorChatIDs = [], moderationActionRepository = null, moderatorService = null }) {
+    constructor({ input, output, accounts = [], userRepository = null, moderationActions = null, reportService = null, notifier = null, moderatorChatIDs = [], moderationActionRepository = null, moderatorService = null, supportTicketService = null }) {
         this.input = input
         this.output = output
         // Имена администраторов сравниваем без учёта регистра
@@ -21,6 +21,7 @@ class ModerationConsole {
         this.moderatorChatIDs = Array.isArray(moderatorChatIDs) ? moderatorChatIDs : []
         this.moderationActionRepository = moderationActionRepository
         this.moderatorService = moderatorService
+        this.supportTicketService = supportTicketService
         this.muted = false
 
         this.rl = readline.createInterface({
@@ -56,6 +57,7 @@ class ModerationConsole {
         this.BANNED_PER_PAGE = 50
         this.HISTORY_PER_PAGE = 50
         this.MODERATORS_PER_PAGE = 50
+        this.TICKETS_PER_PAGE = 50
     }
 
     close() {
@@ -103,6 +105,7 @@ class ModerationConsole {
     async menuLoop(account) {
         while (true) {
             this.printHeader(account)
+            await this.printTicketsNotice()
             this.printMenu()
 
             const choice = (await this.ask('\nВыберите пункт: ')).trim()
@@ -137,13 +140,19 @@ class ModerationConsole {
                 continue
             }
 
+            // Пункт 6 зарезервирован под следующий раздел
+            if (choice === '7') {
+                await this.showTicketsList(account)
+                continue
+            }
+
             if (this.menuItems.has(choice)) {
                 const section = this.menuItems.get(choice)
                 this.output.write(`\n📁 Раздел «${section}» — в разработке.\n\n`)
                 continue
             }
 
-            this.output.write('❌ Неверный пункт. Выберите 1–5 или 0.\n\n')
+            this.output.write('❌ Неверный пункт. Выберите 1–5, 7 или 0.\n\n')
         }
     }
 
@@ -155,6 +164,25 @@ class ModerationConsole {
         this.output.write(`Админ: ${account.name}\n`)
     }
 
+    // В главном меню показываем число ещё не прочитанных админами обращений.
+    async printTicketsNotice() {
+        if (!this.supportTicketService) {
+            return
+        }
+
+        let unread = 0
+
+        try {
+            unread = await this.supportTicketService.getUnreadCount()
+        } catch (error) {
+            return
+        }
+
+        if (unread > 0) {
+            this.output.write(`📮 Непрочитанных тикетов [${unread}]\n`)
+        }
+    }
+
     printMenu() {
         this.output.write('\nМеню:\n')
         this.output.write('1. Список пользователей\n')
@@ -162,6 +190,7 @@ class ModerationConsole {
         this.output.write('3. Заблокированные пользователи\n')
         this.output.write('4. История администрирования\n')
         this.output.write('5. Модераторы\n')
+        this.output.write('7. Тикеты\n')
         this.output.write('0. Выход.\n')
     }
 
@@ -1334,6 +1363,269 @@ class ModerationConsole {
 
         this.output.write(`Личные admin-ключи: ${entry.hasPins ? 'установлены' : 'нет (общие из .env)'}\n`)
         this.output.write('\n')
+    }
+
+    // ── Тикеты (обращения в поддержку) ────────────────────────────────────────
+
+    async showTicketsList(account) {
+        if (!this.supportTicketService) {
+            this.output.write('\n❌ Не подключён сервис тикетов (supportTicketService).\n\n')
+            return
+        }
+
+        let page = 1
+
+        while (true) {
+            const total = await this.supportTicketService.getTicketsCount()
+            const totalPages = Math.max(1, Math.ceil(total / this.TICKETS_PER_PAGE))
+
+            if (page > totalPages) {
+                page = totalPages
+            }
+
+            if (page < 1) {
+                page = 1
+            }
+
+            const offset = (page - 1) * this.TICKETS_PER_PAGE
+            const tickets = await this.supportTicketService.getTicketsPage(this.TICKETS_PER_PAGE, offset)
+
+            this.renderTicketsPage(account, page, totalPages, total, tickets, offset)
+
+            const input = (await this.ask('\nВведите команду: ')).trim()
+
+            if (input === '0') {
+                return
+            }
+
+            if (input.toLowerCase() === 'update') {
+                continue
+            }
+
+            if (input === '<') {
+                if (page <= 1) {
+                    this.output.write('❌ Это первая страница.\n')
+                } else {
+                    page -= 1
+                }
+                continue
+            }
+
+            if (input === '>') {
+                if (page >= totalPages) {
+                    this.output.write('❌ Это последняя страница.\n')
+                } else {
+                    page += 1
+                }
+                continue
+            }
+
+            const parsed = this.parseTicketCommand(input)
+
+            if (!parsed) {
+                this.output.write('❌ Неверная команда. Доступно: read N | reply N "текст" | < | > | 0.\n')
+                continue
+            }
+
+            if (parsed.command === 'read') {
+                await this.showTicketCard(account, parsed.number, tickets, offset)
+                continue
+            }
+
+            await this.replyTicket(account, parsed.number, parsed.text, tickets, offset)
+        }
+    }
+
+    renderTicketsPage(account, page, totalPages, total, tickets, offset) {
+        const border = '='.repeat(40)
+        this.output.write(`\n${border}\n`)
+        this.output.write('=== IdeologyDatingBot | Tickets ===\n')
+        this.output.write(`${border}\n`)
+        this.output.write(`Админ: ${account.name}\n`)
+        this.output.write(`Страница: ${page}/${totalPages} | Всего: ${total}\n\n`)
+
+        if (tickets.length === 0) {
+            this.output.write('Обращений пока нет.\n\n')
+        } else {
+            tickets.forEach((ticket, index) => {
+                const num = offset + index + 1
+                const created = this.formatDateTime(ticket.created_at)
+                const author = this.describeParty(ticket.username, ticket.user_chat_id)
+                const type = this.ticketTypeLabel(ticket.type)
+                const status = this.ticketStatusLabel(ticket)
+
+                this.output.write(`[${num}] ${created} | ${author} | ${type} | ${status}\n`)
+            })
+        }
+
+        this.output.write('\nНавигация:\n')
+        this.output.write('<  — предыдущая страница | >  — следующая страница | 0 — главное меню\n')
+        this.output.write('read N — открыть обращение | reply N "текст" — ответить пользователю\n')
+    }
+
+    ticketTypeLabel(type) {
+        if (type === 'bug') {
+            return 'Баг'
+        }
+
+        if (type === 'idea') {
+            return 'Предложение'
+        }
+
+        return '—'
+    }
+
+    ticketStatusLabel(ticket) {
+        if (ticket.replied_at) {
+            return 'отвечен'
+        }
+
+        if (ticket.read_at) {
+            return 'прочитан'
+        }
+
+        return 'новый'
+    }
+
+    // Находит тикет по сквозному номеру из списка (нумерация как в других вкладках).
+    async resolveTicketByNumber(number, tickets, offset) {
+        if (!Number.isInteger(number) || number < 1) {
+            return null
+        }
+
+        const index = number - offset - 1
+
+        if (index >= 0 && index < tickets.length) {
+            return tickets[index]
+        }
+
+        const rows = await this.supportTicketService.getTicketsPage(1, number - 1)
+
+        return rows[0] || null
+    }
+
+    // read N — открыть обращение; прочтение засчитывается за этим админом.
+    async showTicketCard(account, number, tickets, offset) {
+        const ticket = await this.resolveTicketByNumber(number, tickets, offset)
+
+        if (!ticket) {
+            this.output.write('❌ Нет обращения с таким номером.\n')
+            return
+        }
+
+        let current = ticket
+
+        if (!ticket.read_at) {
+            const marked = await this.supportTicketService.markRead(ticket.id, account.name)
+
+            if (marked.success && marked.ticket) {
+                current = marked.ticket
+            }
+        }
+
+        while (true) {
+            this.renderTicketDetails(current)
+            this.output.write('0 — назад к списку обращений\n')
+
+            const input = (await this.ask('\nВведите команду: ')).trim()
+
+            if (input === '0') {
+                return
+            }
+
+            this.output.write('❌ Неверная команда. Доступно: 0 — назад.\n')
+        }
+    }
+
+    renderTicketDetails(ticket) {
+        const border = '='.repeat(40)
+
+        this.output.write(`\n${border}\n`)
+        this.output.write(`=== Тикет #${ticket.id} ===\n`)
+        this.output.write(`${border}\n`)
+        this.output.write(`От: ${this.describeParty(ticket.username, ticket.user_chat_id)}\n`)
+        this.output.write(`Тип: ${this.ticketTypeLabel(ticket.type)}\n`)
+        this.output.write(`Дата: ${this.formatDateTime(ticket.created_at)}\n`)
+        this.output.write(`Статус: ${this.ticketStatusLabel(ticket)}\n`)
+
+        if (ticket.read_by) {
+            this.output.write(`Прочитал: ${ticket.read_by} (${this.formatDateTime(ticket.read_at)})\n`)
+        }
+
+        this.output.write(`\nТекст обращения:\n${ticket.message || '—'}\n`)
+
+        if (ticket.replied_at) {
+            this.output.write(`\nОтвет: ${ticket.reply_text || '—'}\n`)
+            this.output.write(`Ответил: ${ticket.replied_by || '—'} (${this.formatDateTime(ticket.replied_at)})\n`)
+        }
+
+        this.output.write('\n')
+    }
+
+    // reply N "текст" — отправить пользователю ответ на обращение.
+    async replyTicket(account, number, text, tickets, offset) {
+        const ticket = await this.resolveTicketByNumber(number, tickets, offset)
+
+        if (!ticket) {
+            this.output.write('❌ Нет обращения с таким номером.\n')
+            return
+        }
+
+        const replyText = String(text ?? '').trim()
+
+        if (!replyText) {
+            this.output.write('❌ Текст ответа не может быть пустым.\n')
+            return
+        }
+
+        if (!(await this.confirmActionPin(account))) {
+            return
+        }
+
+        if (!this.notifier) {
+            this.output.write('❌ Не подключён Telegram-клиент для отправки (notifier).\n')
+            return
+        }
+
+        const message = `📩 На ваше обращение был получен ответ!\n\n${replyText}`
+
+        try {
+            await this.notifier.sendMessage(ticket.user_chat_id, message)
+        } catch (error) {
+            this.output.write(`❌ Не удалось отправить ответ: ${error.message}\n`)
+            this.output.write('ℹ️  Пользователь должен хотя бы раз запустить бота (/start).\n')
+            return
+        }
+
+        const saved = await this.supportTicketService.reply(ticket.id, replyText, account.name)
+
+        if (!saved.success) {
+            this.output.write(`⚠️  Ответ отправлен, но не сохранён в базе: ${saved.message || 'ошибка'}\n`)
+            return
+        }
+
+        this.output.write(`✅ Ответ отправлен пользователю ${ticket.user_chat_id}.\n`)
+    }
+
+    // Разбирает команды тикетов: read 1 | reply 1 "текст ответа".
+    parseTicketCommand(input) {
+        const readMatch = input.match(/^read\s+(\d+)$/i)
+
+        if (readMatch) {
+            return { command: 'read', number: Number(readMatch[1]) }
+        }
+
+        const replyMatch = input.match(/^reply\s+(\d+)\s+([\s\S]+)$/i)
+
+        if (!replyMatch) {
+            return null
+        }
+
+        const rest = replyMatch[2].trim()
+        const quoted = rest.match(/^"([\s\S]*)"$/)
+        const text = quoted ? quoted[1].trim() : rest
+
+        return { command: 'reply', number: Number(replyMatch[1]), text }
     }
 
     // «@username (chat_id)» либо «без username (chat_id)».

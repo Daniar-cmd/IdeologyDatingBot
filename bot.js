@@ -6,6 +6,7 @@ const UserRepository = require('./repositories/UserRepository')
 const ReportRepository = require('./repositories/ReportRepository')
 const ModeratorRepository = require('./repositories/ModeratorRepository')
 const MessageRepository = require('./repositories/MessageRepository')
+const SupportTicketRepository = require('./repositories/SupportTicketRepository')
 
 const RegistrationService = require('./services/RegistrationService')
 const LikeService = require('./services/LikeService')
@@ -16,6 +17,7 @@ const ModeratorService = require('./services/ModeratorService')
 const MessageService = require('./services/MessageService')
 const CityService = require('./services/CityService')
 const ContentFilter = require('./services/ContentFilter')
+const SupportTicketService = require('./services/SupportTicketService')
 
 const MessageHandler = require('./handlers/MessageHandler')
 const { parseModeratorIDs } = require('./config/moderators')
@@ -36,6 +38,7 @@ class Bot {
         this.reportRepository = new ReportRepository(db)
         this.moderatorRepository = new ModeratorRepository(db)
         this.messageRepository = new MessageRepository(db)
+        this.supportTicketRepository = new SupportTicketRepository(db)
 
         this.likeService = new LikeService(this.users)
         this.cityService = new CityService()
@@ -56,6 +59,7 @@ class Bot {
 
         this.reportService = new ReportService(this.reportRepository)
         this.moderatorService = new ModeratorService(this.moderatorRepository)
+        this.supportTicketService = new SupportTicketService(this.supportTicketRepository)
 
         this.moderatorChatIDs = parseModeratorIDs(process.env.MODERATORSID || process.env.REPORT_CHAT_IDS)
 
@@ -72,7 +76,8 @@ class Bot {
             this.moderatorService,
             null,
             this.userRepository,
-            this.messageService
+            this.messageService,
+            this.supportTicketService
         )
 
         this.saveInterval = null

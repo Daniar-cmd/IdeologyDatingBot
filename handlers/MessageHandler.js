@@ -2,7 +2,7 @@ const ReportService = require('../services/ReportService')
 const ImageModerationService = require('../services/ImageModerationService')
 
 class MessageHandler {
-    constructor(bot, users, registrationService, profileService, matchingService, likeService, cityService, reportService, moderatorChatIDs = [], moderatorService = null, imageModerationService = null, userRepository = null, messageService = null) {
+    constructor(bot, users, registrationService, profileService, matchingService, likeService, cityService, reportService, moderatorChatIDs = [], moderatorService = null, imageModerationService = null, userRepository = null, messageService = null, supportTicketService = null) {
         this.bot = bot;
         this.users = users;
         this.registrationService = registrationService;
@@ -16,6 +16,7 @@ class MessageHandler {
         this.imageModerationService = imageModerationService || new ImageModerationService(bot);
         this.userRepository = userRepository;
         this.messageService = messageService;
+        this.supportTicketService = supportTicketService;
 
         // Состояние разбора жалобы в чате модератора:
         // { step, reportID, action, reason, attempts, deadline, timer }
@@ -774,10 +775,19 @@ ${user.description || ''}`;
                 message_id: sent.message_id
             });
         } catch (error) {
-            // Inline-кнопки важнее косметики: если правка не удалась, шлём
-            // сообщение ещё раз уже с кнопками, чтобы не потерять их.
-            console.error('Не удалось вернуть inline-кнопки, повторяю сообщение:', error.message);
-            await this.sendMessage(chatID, text, { ...options, reply_markup: inlineMarkup }).catch(() => {});
+            // Telegram не даёт «донавесить» inline-кнопки на сообщение, которым
+            // только что сняли нижнюю клавиатуру. Пересоздаём сообщение с
+            // кнопками, а прежнее удаляем — иначе пользователь получит дубль.
+            const removed = await this.bot
+                .deleteMessage(chatID, sent.message_id)
+                .then(() => true)
+                .catch(() => false);
+
+            if (removed) {
+                await this.sendMessage(chatID, text, { ...options, reply_markup: inlineMarkup }).catch(() => {});
+            } else {
+                console.error('Не удалось вернуть inline-кнопки:', error.message);
+            }
         }
 
         return sent;
@@ -1117,9 +1127,8 @@ Telegram: ${currentUsername}`
         await this.showNextProfile(chatID);
     }
 
-    // Приём текста обращения в поддержку. Сохранение тикета и уведомление
-    // модераторов подключим отдельным пакетом — сейчас обращение принимается
-    // и подтверждается пользователю.
+    // Приём текста обращения в поддержку. Обращение сохраняется тикетом,
+    // админы читают и отвечают на него из консольной панели (пункт «Тикеты»).
     async handleSupportMessage(chatID, user, text) {
         if (text === 'Отмена') {
             user.supportPending = null;
@@ -1150,11 +1159,30 @@ Telegram: ${currentUsername}`
         }
 
         const type = user.supportPending;
-        user.supportPending = null;
 
-        const typeLabel = type === 'bug' ? 'Баг' : 'Предложение';
-        // TODO: сохранить тикет и уведомить модераторов (механика тикетов — позже).
-        console.log(`[Support] ${typeLabel} от ${chatID}: ${text}`);
+        // Сохраняем обращение. Пока тикет не записан, подтверждение не шлём —
+        // иначе пользователь решит, что обращение дошло.
+        if (this.supportTicketService) {
+            const result = await this.supportTicketService.createTicket({
+                chatID,
+                username: user.username || null,
+                type,
+                message: text
+            });
+
+            if (!result.success) {
+                await this.sendMessage(
+                    chatID,
+                    `${result.message || '❌ Не удалось отправить обращение.'}\n\nПопробуйте ещё раз или нажмите «Отмена».`,
+                    this.cancelKeyboard()
+                );
+                return;
+            }
+        } else {
+            console.log(`📮 Обращение (без сохранения) тип=${type} от ${chatID}: ${text}`);
+        }
+
+        user.supportPending = null;
 
         await this.sendWithInline(
             chatID,
