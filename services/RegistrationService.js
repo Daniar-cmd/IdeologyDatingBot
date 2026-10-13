@@ -88,6 +88,7 @@ restartRegistration(chatID) {
     user.waitingForDescription = false
     user.waitingForCity = false
     user.waitingForPhotos = false
+    user.waitingForConsent = false
     user.waitingForName = true
 
     return {
@@ -104,10 +105,26 @@ startRegistration(chatID, username = null) {
         username,
         registered: true
     })
-    // Вход свободный: инвайт-код больше не требуется, сразу переходим к анкете.
-    user.waitingForName = true
+    // Вход свободный: инвайт-код больше не требуется. Сначала показываем
+    // правила и ждём согласия — имя спросим только после кнопки «Согласен».
+    user.waitingForConsent = true
+    user.waitingForName = false
     this.users[Number(chatID)] = user
     return user
+}
+// Пользователь нажал «Согласен» на экране правил: только теперь начинаем
+// анкету и переходим к вводу имени.
+acceptConsent(chatID) {
+    const user = this.users[Number(chatID)]
+    if (!user || !user.waitingForConsent) {
+        return { success: false }
+    }
+    user.waitingForConsent = false
+    user.waitingForName = true
+    return {
+        success: true,
+        user
+    }
 }
 setName(chatID, text) {
     const user = this.users[Number(chatID)]

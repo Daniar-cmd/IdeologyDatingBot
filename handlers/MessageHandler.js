@@ -661,6 +661,38 @@ ${user.description || ''}`;
         };
     }
 
+    // Экран первого захода: краткое знакомство, предупреждение о безопасности
+    // и правила. Единственная кнопка — «Согласен», после неё спрашиваем имя.
+    consentKeyboard() {
+        return {
+            reply_markup: {
+                inline_keyboard: [[
+                    { text: '✅ Согласен', callback_data: 'menu_agree' }
+                ]]
+            }
+        };
+    }
+
+    consentText() {
+        return [
+            '👋 Добро пожаловать в IdeologyDatingBot!',
+            '',
+            'Здесь можно найти друзей или вторую половинку по общим взглядам, ценностям и мировоззрению.',
+            '',
+            '⚠️ Безопасность прежде всего',
+            '• В интернете люди могут выдавать себя за других — будьте внимательны и не доверяйте слепо.',
+            '• Не сообщайте личные данные: адрес, номер телефона, банковские карты, пароли и коды из СМС.',
+            '• Не переводите деньги и не переходите по подозрительным ссылкам.',
+            '• Назначайте встречу только в публичном месте.',
+            '',
+            '📜 Краткие правила',
+            '• В текстах (имя, описание, город) запрещены: мат и оскорбления, угрозы и призывы к насилию, разжигание вражды, сексуальный контент, реклама, ссылки и упоминания сторонних сайтов и мессенджеров.',
+            '• Запрещены фото: обнажённое тело и эротика, порнография, чужие люди без согласия, дети, сцены насилия, а также изображения с QR-кодами, ссылками и рекламой.',
+            '',
+            'Нажмите «✅ Согласен», чтобы продолжить и заполнить анкету.'
+        ].join('\n');
+    }
+
     // Клавиатура на шаге ввода причины репорта: можно отменить.
     reportCancelKeyboard() {
         return this.cancelKeyboard();
@@ -1252,8 +1284,8 @@ Telegram: ${currentUsername}`
 
                     await this.sendMessage(
                         chatID,
-                        'Привет! Это IdeologyDatingBot. Здесь ты сможешь найти друзей или вторую половинку на основании общих взглядов, ценностей и мировоззрения.\n\n👤 Давайте создадим ваш профиль.\n\nКак вас зовут?',
-                        this.nameKeyboard()
+                        this.consentText(),
+                        this.consentKeyboard()
                     );
                     return;
                 }
@@ -1461,6 +1493,16 @@ Telegram: ${currentUsername}`
                                 one_time_keyboard: true
                             }
                         }
+                    );
+                    return;
+                }
+
+                // Пока пользователь не нажал «Согласен», анкету не начинаем.
+                if (user.waitingForConsent) {
+                    await this.sendMessage(
+                        chatID,
+                        'Чтобы продолжить, нажмите кнопку «✅ Согласен» под сообщением с правилами.',
+                        this.consentKeyboard()
                     );
                     return;
                 }
@@ -2061,6 +2103,28 @@ Telegram: ${currentUsername}`
                         : '💡 Опишите вашу идею или предложение по развитию сервиса. Пришлите одним сообщением.';
 
                     await this.sendMessage(chatID, prompt, this.cancelKeyboard());
+                    return;
+                }
+
+                // «Согласен» на экране правил: только теперь начинаем ввод имени.
+                if (data === 'menu_agree') {
+                    await this.bot.answerCallbackQuery(query.id).catch(() => {});
+                    await this.bot.editMessageReplyMarkup(
+                        { inline_keyboard: [] },
+                        { chat_id: chatID, message_id: query.message.message_id }
+                    ).catch(() => {});
+
+                    const consentResult = this.registrationService.acceptConsent(chatID);
+
+                    if (!consentResult.success) {
+                        return;
+                    }
+
+                    await this.sendMessage(
+                        chatID,
+                        '✅ Спасибо! Теперь заполним анкету.\n\n👤 Как вас зовут?',
+                        this.nameKeyboard()
+                    );
                     return;
                 }
 
