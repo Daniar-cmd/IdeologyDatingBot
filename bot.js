@@ -22,6 +22,13 @@ const SupportTicketService = require('./services/SupportTicketService')
 const MessageHandler = require('./handlers/MessageHandler')
 const { parseModeratorIDs } = require('./config/moderators')
 
+// Интервалы фоновых задач. Модерацию и список модераторов опрашиваем реже:
+// изменения из консоли — редкие ручные действия, а полный SELECT по users на
+// каждом тике при росте базы становится заметной нагрузкой на удалённую БД.
+const AUTOSAVE_INTERVAL_MS = 5000
+const MODERATION_SYNC_INTERVAL_MS = 10000
+const MODERATOR_REFRESH_INTERVAL_MS = 30000
+
 class Bot {
     constructor() {
         if (!process.env.BOT_TOKEN) {
@@ -83,6 +90,7 @@ class Bot {
         this.moderationInterval = null
         this.moderatorInterval = null
         this.syncingModeration = false
+        this.refreshingModerators = false
     }
 
     async loadUsers() {
@@ -110,40 +118,52 @@ class Bot {
     // Подтягивает модераторов из БД: активных добавляет к встроенным (MODERATORSID),
     // снятых убирает. Обновляет список получателей жалоб и их личные admin-ключи.
     async refreshModerators() {
-        const envIDs = parseModeratorIDs(process.env.MODERATORSID || process.env.REPORT_CHAT_IDS)
-        const ids = new Set(envIDs)
-        const pins = {}
+        // Защита от наложения запусков (интервал + вызов при старте): при
+        // медленной БД тики не должны наслаиваться друг на друга.
+        if (this.refreshingModerators) {
+            return
+        }
 
-        let rows = []
+        this.refreshingModerators = true
 
         try {
-            rows = await this.moderatorRepository.listModerators()
-        } catch (error) {
-            console.error('Ошибка чтения модераторов из БД:', error.message)
-        }
+            const envIDs = parseModeratorIDs(process.env.MODERATORSID || process.env.REPORT_CHAT_IDS)
+            const ids = new Set(envIDs)
+            const pins = {}
 
-        for (const row of rows) {
-            const id = Number(row.chat_id)
+            let rows = []
 
-            if (!Number.isInteger(id)) {
-                continue
+            try {
+                rows = await this.moderatorRepository.listModerators()
+            } catch (error) {
+                console.error('Ошибка чтения модераторов из БД:', error.message)
             }
 
-            if (row.active) {
-                ids.add(id)
+            for (const row of rows) {
+                const id = Number(row.chat_id)
 
-                if (row.pin1 || row.pin2) {
-                    pins[id] = { pin1: row.pin1 || null, pin2: row.pin2 || null }
+                if (!Number.isInteger(id)) {
+                    continue
                 }
-            } else {
-                ids.delete(id)
+
+                if (row.active) {
+                    ids.add(id)
+
+                    if (row.pin1 || row.pin2) {
+                        pins[id] = { pin1: row.pin1 || null, pin2: row.pin2 || null }
+                    }
+                } else {
+                    ids.delete(id)
+                }
             }
-        }
 
-        this.moderatorChatIDs = [...ids]
+            this.moderatorChatIDs = [...ids]
 
-        if (this.messageHandler) {
-            this.messageHandler.setModerators(this.moderatorChatIDs, pins)
+            if (this.messageHandler) {
+                this.messageHandler.setModerators(this.moderatorChatIDs, pins)
+            }
+        } finally {
+            this.refreshingModerators = false
         }
     }
 
@@ -226,23 +246,25 @@ class Bot {
             this.saveAllUsers().catch(error => {
                 console.error('Ошибка сохранения анкет:', error)
             })
-        }, 5000)
+        }, AUTOSAVE_INTERVAL_MS)
 
-        // Модерацию синхронизируем чаще (2с), чтобы баны/варны из консоли
-        // применялись к работающему боту почти сразу.
+        // Модерацию синхронизируем по таймеру, чтобы баны/варны из консоли
+        // применялись к работающему боту без перезапуска. Изменения — редкие
+        // ручные действия, поэтому интервал умеренный (см. MODERATION_SYNC_INTERVAL_MS).
         this.moderationInterval = setInterval(() => {
             this.syncModerationFromDb().catch(error => {
                 console.error('Ошибка синхронизации модерации:', error)
             })
-        }, 2000)
+        }, MODERATION_SYNC_INTERVAL_MS)
 
-        // Список модераторов подтягиваем из БД (приглашения/снятия из панели),
-        // чтобы изменения применялись без перезапуска бота.
+        // Список модераторов подтягиваем из БД (приглашения/снятия из панели).
+        // Принятый внутри бота инвайт обновляет список сразу (addModerator),
+        // поэтому опрос нужен только для правок из консоли и может быть редким.
         this.moderatorInterval = setInterval(() => {
             this.refreshModerators().catch(error => {
                 console.error('Ошибка обновления модераторов:', error)
             })
-        }, 5000)
+        }, MODERATOR_REFRESH_INTERVAL_MS)
     }
 
     registerCommands() {
