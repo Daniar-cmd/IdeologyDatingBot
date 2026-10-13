@@ -641,6 +641,24 @@ ${user.description || ''}`;
         };
     }
 
+    // Первое фото — с подписью и клавиатурой, остальные — одним альбомом.
+    // Отдельного сообщения-инструкции не отправляем.
+    async sendProfileWithKeyboard(chatID, user, caption, replyMarkup) {
+        await this.bot.sendPhoto(chatID, user.photos[0], {
+            caption,
+            reply_markup: replyMarkup
+        });
+
+        if (user.photos.length > 1) {
+            const rest = user.photos.slice(1).map(photo => ({
+                type: 'photo',
+                media: photo
+            }));
+
+            await this.bot.sendMediaGroup(chatID, rest);
+        }
+    }
+
     async sendDatingProfile(chatID, otherChatID) {
         const user = this.users[otherChatID];
 
@@ -654,35 +672,13 @@ ${user.description || ''}`;
             return;
         }
 
-        const incoming = await this.formatIncomingMessages(chatID, otherChatID);
-
         const profileText = `👤 ${user.name}, ${user.age}
 ${this.formatLocation(user)}
 
-${user.description || ''}${incoming}`;
+${user.description || ''}`;
 
         try {
-            if (user.photos.length === 1) {
-                await this.bot.sendPhoto(chatID, user.photos[0], {
-                    caption: profileText,
-                    reply_markup: this.datingKeyboard()
-                });
-                return;
-            }
-
-            const media = user.photos.map((photo, index) => ({
-                type: 'photo',
-                media: photo,
-                ...(index === 0 ? { caption: profileText } : {})
-            }));
-
-            await this.bot.sendMediaGroup(chatID, media);
-
-            await this.bot.sendMessage(
-                chatID,
-                '❤️ — лайк, 💌 — лайк с сообщением, ❌ — пропустить.',
-                { reply_markup: this.datingKeyboard() }
-            );
+            await this.sendProfileWithKeyboard(chatID, user, profileText, this.datingKeyboard());
         } catch (error) {
             console.error('Ошибка отправки анкеты:', error.message);
             await this.bot.sendMessage(chatID, '❌ Не удалось отправить анкету. Попробуйте позже.');
@@ -753,27 +749,7 @@ ${user.description || ''}${incoming}
 Симпатия взаимна?`;
 
         try {
-            if (user.photos.length === 1) {
-                await this.bot.sendPhoto(chatID, user.photos[0], {
-                    caption: profileText,
-                    reply_markup: this.datingKeyboard()
-                });
-                return;
-            }
-
-            const media = user.photos.map((photo, index) => ({
-                type: 'photo',
-                media: photo,
-                ...(index === 0 ? { caption: profileText } : {})
-            }));
-
-            await this.bot.sendMediaGroup(chatID, media);
-
-            await this.bot.sendMessage(
-                chatID,
-                '❤️ — взаимно, 💌 — взаимно с сообщением, ❌ — пропустить.',
-                { reply_markup: this.datingKeyboard() }
-            );
+            await this.sendProfileWithKeyboard(chatID, user, profileText, this.datingKeyboard());
         } catch (error) {
             console.error('Ошибка показа анкеты лайкнувшего:', error.message);
             await this.bot.sendMessage(chatID, '❌ Не удалось показать анкету. Попробуйте позже.');
@@ -899,25 +875,11 @@ Telegram: ${currentUsername}`
         }
 
         if (action === '💌') {
-            const messageLike = this.likeService.sendLike(chatID, target);
-
-            if (!messageLike.success) {
-                await this.bot.sendMessage(chatID, messageLike.message || 'Не удалось поставить лайк.');
-                return;
-            }
-
-            if (messageLike.isMatch) {
-                await this.celebrateMatch(chatID, target);
-            } else if (!messageLike.alreadyLiked) {
-                await this.bot.sendMessage(chatID, '❤️ Лайк отправлен! Ждём ответа.');
-                await this.notifyUserLike(chatID, target);
-            }
-
             user.pendingMessageTo = target;
 
             await this.bot.sendMessage(
                 chatID,
-                `💌 Напишите сообщение для ${targetUser.name}.\n\nОно уйдёт вместе с лайком. Чтобы отменить — нажмите ❌.`
+                `💌 Напишите сообщение для ${targetUser.name}.`
             );
             return;
         }
@@ -943,6 +905,7 @@ Telegram: ${currentUsername}`
     }
 
     // Отправка текста, который пользователь набрал после нажатия 💌.
+    // Сообщение и лайк уходят вместе — как одна сущность.
     async handlePendingMessage(chatID, text) {
         const user = this.users[chatID];
         const target = user.pendingMessageTo;
@@ -960,19 +923,28 @@ Telegram: ${currentUsername}`
             return;
         }
 
-        const result = await this.messageService.send(chatID, target, text).catch(error => {
+        const saved = await this.messageService.send(chatID, target, text).catch(error => {
             console.error('Ошибка отправки сообщения:', error.message);
             return { success: false, message: '❌ Не удалось отправить сообщение.' };
         });
 
         // При ошибке ожидание сохраняется — можно повторить ввод.
-        if (!result.success) {
-            await this.bot.sendMessage(chatID, result.message || '❌ Не удалось отправить сообщение.');
+        if (!saved.success) {
+            await this.bot.sendMessage(chatID, saved.message || '❌ Не удалось отправить сообщение.');
             return;
         }
 
+        // Лайк вместе с сообщением.
+        const like = this.likeService.sendLike(chatID, target);
+
+        if (like.success && like.isMatch) {
+            await this.celebrateMatch(chatID, target);
+        } else if (like.success && !like.alreadyLiked) {
+            await this.notifyUserLike(chatID, target);
+        }
+
         user.pendingMessageTo = null;
-        await this.bot.sendMessage(chatID, `💌 Сообщение отправлено ${targetUser.name}.`);
+        await this.bot.sendMessage(chatID, '💌 Ваше сообщение отправлено.');
         await this.showNextProfile(chatID);
     }
 
