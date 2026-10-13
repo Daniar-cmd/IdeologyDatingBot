@@ -2,7 +2,7 @@ const ReportService = require('../services/ReportService')
 const ImageModerationService = require('../services/ImageModerationService')
 
 class MessageHandler {
-    constructor(bot, users, registrationService, profileService, matchingService, likeService, cityService, reportService, moderatorChatIDs = [], moderatorService = null, imageModerationService = null, userRepository = null, messageService = null, supportTicketService = null) {
+    constructor(bot, users, registrationService, profileService, matchingService, likeService, cityService, reportService, moderatorChatIDs = [], moderatorService = null, imageModerationService = null, userRepository = null, messageService = null, supportTicketService = null, referralService = null) {
         this.bot = bot;
         this.users = users;
         this.registrationService = registrationService;
@@ -17,6 +17,9 @@ class MessageHandler {
         this.userRepository = userRepository;
         this.messageService = messageService;
         this.supportTicketService = supportTicketService;
+        this.referralService = referralService;
+        // Username бота для реферальных ссылок (/ref). Задаётся из Bot после getMe.
+        this.botUsername = null;
 
         // Состояние разбора жалобы в чате модератора:
         // { step, reportID, action, reason, attempts, deadline, timer }
@@ -37,6 +40,11 @@ class MessageHandler {
 
         this.adminPin1 = String(process.env.ADMIN_PIN_KEY1 || '285868').trim();
         this.adminPin2 = String(process.env.ADMIN_PIN_KEY2 || '188467').trim();
+    }
+
+    // Username бота нужен для реферальных ссылок в /ref.
+    setBotUsername(username) {
+        this.botUsername = username || null;
     }
 
     isModeratorChat(chatID) {
@@ -726,6 +734,7 @@ ${user.description || ''}`;
             '• /myprofile — посмотреть и изменить свою анкету',
             '• /lenta — смотреть анкеты',
             '• /report — пожаловаться на анкету',
+            '• /ref — пригласить друзей',
             '• /help — эта справка',
             '',
             'Частые вопросы:',
@@ -747,6 +756,53 @@ ${user.description || ''}`;
                 ]
             }
         };
+    }
+
+    // /ref: реферальная ссылка, счётчик приглашённых и кнопка
+    // «Отправить приглашение» (системное окно «Поделиться»).
+    async sendReferral(chatID) {
+        if (!this.referralService || !this.botUsername) {
+            await this.sendMessage(chatID, '🚧 Приглашения пока недоступны. Попробуйте позже.');
+            return;
+        }
+
+        const link = this.referralService.buildInviteLink(chatID, this.botUsername);
+        let invited = 0;
+
+        try {
+            invited = await this.referralService.countReferrals(chatID);
+        } catch (error) {
+            console.error('Ошибка чтения рефералов:', error.message);
+        }
+
+        const text = [
+            '🤝 Пригласите друзей в IdeologyDatingBot!',
+            '',
+            'Ваша ссылка:',
+            link,
+            '',
+            `👥 Пришли по ссылке и заполнили анкету: ${invited}`
+        ].join('\n');
+
+        await this.sendWithInline(chatID, text, {
+            inline_keyboard: [[
+                { text: '📨 Отправить приглашение', url: this.referralService.shareUrl(link) }
+            ]]
+        });
+    }
+
+    // Приглашённый по ссылке заполнил анкету — засчитываем реферал.
+    // Для пользователей без реферальной связи вызов безвреден (нет строки).
+    async markReferralCompleted(chatID) {
+        if (!this.referralService) {
+            return;
+        }
+
+        try {
+            await this.referralService.markProfileCompleted(chatID);
+        } catch (error) {
+            console.error('Ошибка учёта реферала:', error.message);
+        }
     }
 
     // Кнопки выбора типа обращения в поддержку.
@@ -1276,11 +1332,29 @@ Telegram: ${currentUsername}`
                     return;
                 }
 
-                if (text === '/start') {
+                if (text === '/start' || (typeof text === 'string' && text.startsWith('/start '))) {
+                    const isNewUser = !this.users[Number(chatID)];
+                    const payload = text.slice('/start'.length).trim();
+
                     this.registrationService.startRegistration(
                         chatID,
                         msg.from.username || null
                     );
+
+                    // Приход по реферальной ссылке (/start ref_<id>): запоминаем
+                    // пригласившего только для нового пользователя. В счётчик это
+                    // попадёт после того, как он заполнит анкету.
+                    const referrerID = this.referralService
+                        ? this.referralService.parseStartPayload(payload)
+                        : null;
+
+                    if (referrerID && isNewUser && this.users[referrerID]) {
+                        await this.referralService
+                            .registerVisit(referrerID, chatID)
+                            .catch(error => {
+                                console.error('Ошибка записи реферала:', error.message);
+                            });
+                    }
 
                     await this.sendMessage(
                         chatID,
@@ -1694,6 +1768,7 @@ Telegram: ${currentUsername}`
                             '🎉 Поздравляем! Ваша анкета успешно создана.',
                             { reply_markup: { remove_keyboard: true } }
                         );
+                        await this.markReferralCompleted(chatID);
                         await this.sendProfile(chatID, user);
                         return;
                     }
@@ -1711,6 +1786,7 @@ Telegram: ${currentUsername}`
                             '🎉 Поздравляем! Ваша анкета успешно создана.',
                             { reply_markup: { remove_keyboard: true } }
                         );
+                        await this.markReferralCompleted(chatID);
                         await this.sendProfile(chatID, user);
                         return;
                     }
@@ -1745,6 +1821,7 @@ Telegram: ${currentUsername}`
                             '🎉 Поздравляем! Ваша анкета успешно создана.',
                             { reply_markup: { remove_keyboard: true } }
                         );
+                        await this.markReferralCompleted(chatID);
                         await this.sendProfile(chatID, user);
                         return;
                     }
@@ -1826,6 +1903,16 @@ Telegram: ${currentUsername}`
 
                 if (text === '/lenta') {
                     await this.startDating(chatID);
+                    return;
+                }
+
+                if (text === '/ref') {
+                    if (!this.profileService.isProfileComplete(chatID)) {
+                        await this.sendMessage(chatID, '❌ Сначала необходимо завершить создание анкеты.');
+                        return;
+                    }
+
+                    await this.sendReferral(chatID);
                     return;
                 }
 

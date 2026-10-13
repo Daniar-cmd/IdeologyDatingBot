@@ -7,6 +7,7 @@ const ReportRepository = require('./repositories/ReportRepository')
 const ModeratorRepository = require('./repositories/ModeratorRepository')
 const MessageRepository = require('./repositories/MessageRepository')
 const SupportTicketRepository = require('./repositories/SupportTicketRepository')
+const ReferralRepository = require('./repositories/ReferralRepository')
 
 const RegistrationService = require('./services/RegistrationService')
 const LikeService = require('./services/LikeService')
@@ -18,6 +19,7 @@ const MessageService = require('./services/MessageService')
 const CityService = require('./services/CityService')
 const ContentFilter = require('./services/ContentFilter')
 const SupportTicketService = require('./services/SupportTicketService')
+const ReferralService = require('./services/ReferralService')
 
 const MessageHandler = require('./handlers/MessageHandler')
 const { parseModeratorIDs } = require('./config/moderators')
@@ -46,6 +48,7 @@ class Bot {
         this.moderatorRepository = new ModeratorRepository(db)
         this.messageRepository = new MessageRepository(db)
         this.supportTicketRepository = new SupportTicketRepository(db)
+        this.referralRepository = new ReferralRepository(db)
 
         this.likeService = new LikeService(this.users)
         this.cityService = new CityService()
@@ -66,6 +69,7 @@ class Bot {
         this.reportService = new ReportService(this.reportRepository)
         this.moderatorService = new ModeratorService(this.moderatorRepository)
         this.supportTicketService = new SupportTicketService(this.supportTicketRepository)
+        this.referralService = new ReferralService(this.referralRepository)
 
         this.moderatorChatIDs = parseModeratorIDs(process.env.MODERATORSID || process.env.REPORT_CHAT_IDS)
 
@@ -83,7 +87,8 @@ class Bot {
             null,
             this.userRepository,
             this.messageService,
-            this.supportTicketService
+            this.supportTicketService,
+            this.referralService
         )
 
         this.saveInterval = null
@@ -91,6 +96,7 @@ class Bot {
         this.moderatorInterval = null
         this.syncingModeration = false
         this.refreshingModerators = false
+        this.botUsername = null
     }
 
     async loadUsers() {
@@ -113,6 +119,25 @@ class Bot {
 
     async saveAllUsers() {
         await this.userRepository.saveAll(this.users)
+    }
+
+    // Username бота нужен для реферальных ссылок. Спрашиваем у Telegram,
+    // с запасным значением из .env, если запрос не удался.
+    async loadBotUsername() {
+        let username = process.env.BOT_USERNAME || null
+
+        try {
+            const me = await this.bot.getMe()
+            username = me.username || username
+        } catch (error) {
+            console.error('Не удалось получить username бота:', error.message)
+        }
+
+        this.botUsername = username
+
+        if (this.messageHandler) {
+            this.messageHandler.setBotUsername(username)
+        }
     }
 
     // Подтягивает модераторов из БД: активных добавляет к встроенным (MODERATORSID),
@@ -282,6 +307,10 @@ class Bot {
                 description: 'Пожаловаться на анкету'
             },
             {
+                command: 'ref',
+                description: 'Пригласить друзей'
+            },
+            {
                 command: 'help',
                 description: 'Справка и поддержка'
             }
@@ -304,6 +333,9 @@ class Bot {
             await this.loadUsers()
 
             await this.saveAllUsers()
+
+            // Узнаём username бота, чтобы строить реферальные ссылки.
+            await this.loadBotUsername()
 
             this.registerCommands()
             this.messageHandler.register()

@@ -185,6 +185,25 @@ async function initDatabase() {
             ON messages (from_chat_id, to_chat_id, created_at)
         `)
 
+        // Рефералы: кто кого пригласил по ссылке /start ref_<id>.
+        // referred_chat_id — первичный ключ, поэтому у одного пользователя
+        // может быть только один пригласивший (первый заход по ссылке).
+        // В счётчик идут только анкеты, доведённые до конца (completed = TRUE).
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS referrals (
+                referred_chat_id TEXT PRIMARY KEY,
+                referrer_chat_id TEXT NOT NULL,
+                completed BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                completed_at TIMESTAMPTZ
+            )
+        `)
+
+        await db.query(`
+            CREATE INDEX IF NOT EXISTS referrals_referrer_idx
+            ON referrals (referrer_chat_id)
+        `)
+
     } catch (error) {
         console.error('Ошибка инициализации PostgreSQL:')
         console.error(error.message)
