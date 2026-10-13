@@ -1828,6 +1828,18 @@ Telegram: ${currentUsername}`
                     await this.startDating(chatID);
                     return;
                 }
+
+                // Текст вне сценария, а анкета не завершена: например, шаг
+                // регистрации потерян после перезапуска бота. Раньше такое
+                // сообщение молча игнорировалось — подсказываем, что делать.
+                if (!this.profileService.isProfileComplete(chatID)) {
+                    await this.sendMessage(
+                        chatID,
+                        '❓ Не понял сообщение.\n\nЧтобы начать знакомства, нужно создать анкету. Отправьте команду /start.',
+                        { reply_markup: { remove_keyboard: true } }
+                    );
+                    return;
+                }
             } catch (error) {
                 console.error('Ошибка обработки сообщения:', error);
                 await this.sendMessage(chatID, '❌ Произошла ошибка. Попробуйте ещё раз.').catch(() => {});
