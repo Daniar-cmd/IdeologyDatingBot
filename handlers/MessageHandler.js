@@ -649,6 +649,28 @@ ${user.description || ''}`;
         };
     }
 
+    // Клавиатура на шаге ввода имени: можно взять имя из профиля Telegram.
+    nameKeyboard() {
+        return {
+            reply_markup: {
+                keyboard: [['Взять имя профиля']],
+                resize_keyboard: true,
+                one_time_keyboard: true
+            }
+        };
+    }
+
+    // Клавиатура на шаге ввода причины репорта: можно отменить.
+    reportCancelKeyboard() {
+        return {
+            reply_markup: {
+                keyboard: [['Отмена']],
+                resize_keyboard: true,
+                one_time_keyboard: true
+            }
+        };
+    }
+
     // Единая точка отправки текста. Нижняя клавиатура лайка/скипа должна
     // быть видна только пока последнее сообщение — анкета, поэтому любое
     // «постороннее» сообщение снимает её. Inline-кнопки Telegram не умеет
@@ -678,13 +700,19 @@ ${user.description || ''}`;
             return this.bot.sendMessage(chatID, text, opts);
         }
 
-        const sent = await this.bot.sendMessage(chatID, text, {
-            ...opts,
+        return this.sendWithInline(chatID, text, markup, opts);
+    }
+
+    // Отправляет сообщение со снятием нижней клавиатуры и вешает inline-кнопки
+    // вторым шагом: Telegram не даёт совместить это в одном сообщении.
+    async sendWithInline(chatID, text, inlineMarkup, options = {}) {
+        const sent = await this.sendMessage(chatID, text, {
+            ...options,
             reply_markup: { remove_keyboard: true }
         });
 
         try {
-            await this.bot.editMessageReplyMarkup(markup, {
+            await this.bot.editMessageReplyMarkup(inlineMarkup, {
                 chat_id: chatID,
                 message_id: sent.message_id
             });
@@ -692,7 +720,7 @@ ${user.description || ''}`;
             // Inline-кнопки важнее косметики: если правка не удалась, шлём
             // сообщение ещё раз уже с кнопками, чтобы не потерять их.
             console.error('Не удалось вернуть inline-кнопки, повторяю сообщение:', error.message);
-            await this.bot.sendMessage(chatID, text, opts).catch(() => {});
+            await this.sendMessage(chatID, text, { ...options, reply_markup: inlineMarkup }).catch(() => {});
         }
 
         return sent;
@@ -1105,10 +1133,21 @@ Telegram: ${currentUsername}`
                 user.username = msg.from.username || null;
 
                 if (user.reportReasonPending) {
+                    if (text === 'Отмена') {
+                        user.reportReasonPending = false;
+                        await this.sendMessage(
+                            chatID,
+                            '❌ Репорт отменён.',
+                            { reply_markup: { remove_keyboard: true } }
+                        );
+                        return;
+                    }
+
                     if (!text) {
                         await this.sendMessage(
                             chatID,
-                            '❌ Пожалуйста, напишите причину текстом.'
+                            '❌ Пожалуйста, напишите причину текстом.',
+                            this.reportCancelKeyboard()
                         );
                         return;
                     }
@@ -1116,7 +1155,8 @@ Telegram: ${currentUsername}`
                     if (text.startsWith('/')) {
                         await this.sendMessage(
                             chatID,
-                            '❌ Это команда, а не причина.\n\nНапишите текстом, что именно нарушает анкета.'
+                            '❌ Это команда, а не причина.\n\nНапишите текстом, что именно нарушает анкета.',
+                            this.reportCancelKeyboard()
                         );
                         return;
                     }
@@ -1139,15 +1179,13 @@ Telegram: ${currentUsername}`
                         return;
                     }
 
-                    await this.sendMessage(
+                    await this.sendWithInline(
                         chatID,
                         '✅ Жалоба отправлена. Спасибо, мы рассмотрим её.',
                         {
-                            reply_markup: {
-                                inline_keyboard: [[
-                                    { text: '🔎 Продолжить просмотр анкет', callback_data: 'menu_lenta' }
-                                ]]
-                            }
+                            inline_keyboard: [[
+                                { text: '🔎 Продолжить просмотр анкет', callback_data: 'menu_lenta' }
+                            ]]
                         }
                     );
 
@@ -1297,18 +1335,34 @@ Telegram: ${currentUsername}`
 
                     await this.sendMessage(
                         chatID,
-                        '✅ Инвайт-код принят! Вы успешно вошли в систему.\n\n👤 Давайте создадим ваш профиль.\n\nКак вас зовут?'
+                        '✅ Инвайт-код принят! Вы успешно вошли в систему.\n\n👤 Давайте создадим ваш профиль.\n\nКак вас зовут?',
+                        this.nameKeyboard()
                     );
                     return;
                 }
 
                 if (user.waitingForName) {
-                    const result = this.registrationService.setName(chatID, text);
+                    const wantsProfileName = text === 'Взять имя профиля';
+                    const profileName = wantsProfileName
+                        ? String(msg.from?.first_name || msg.from?.username || '').trim()
+                        : text;
+
+                    if (wantsProfileName && !profileName) {
+                        await this.sendMessage(
+                            chatID,
+                            '❌ Не удалось взять имя из профиля Telegram. Введите имя текстом.',
+                            this.nameKeyboard()
+                        );
+                        return;
+                    }
+
+                    const result = this.registrationService.setName(chatID, profileName);
 
                     if (!result.success) {
                         await this.sendMessage(
                             chatID,
-                            result.message || '❌ Не удалось сохранить имя. Попробуйте ещё раз.'
+                            result.message || '❌ Не удалось сохранить имя. Попробуйте ещё раз.',
+                            this.nameKeyboard()
                         );
                         return;
                     }
@@ -1562,11 +1616,14 @@ Telegram: ${currentUsername}`
                     }
 
                     const targetChatID = user.lastShownProfileID;
+                    const underProfile = Boolean(user.datingKeyboardActive) &&
+                        Boolean(targetChatID) &&
+                        Boolean(this.users[targetChatID]);
 
-                    if (!targetChatID || !this.users[targetChatID]) {
+                    if (!underProfile) {
                         await this.sendMessage(
                             chatID,
-                            '🚫 Не найдено анкеты для жалобы.\n\nСначала посмотрите анкету в ленте — /lenta.'
+                            '🚫 Здесь невозможно воспользоваться данной командой.'
                         );
                         return;
                     }
@@ -1575,7 +1632,8 @@ Telegram: ${currentUsername}`
 
                     await this.sendMessage(
                         chatID,
-                        '🚩 Укажите причину репорта.\n\nНапишите текстом, что именно в этой анкете нарушает правила.'
+                        '🚩 Укажите причину репорта.\n\nНапишите текстом, что именно в этой анкете нарушает правила.',
+                        this.reportCancelKeyboard()
                     );
                     return;
                 }
@@ -1857,7 +1915,7 @@ Telegram: ${currentUsername}`
                     await this.sendMessage(
                         chatID,
                         '♻️ Заполняем анкету заново.\n\n👤 Как вас зовут?',
-                        { reply_markup: { remove_keyboard: true } }
+                        this.nameKeyboard()
                     );
                     return;
                 }
