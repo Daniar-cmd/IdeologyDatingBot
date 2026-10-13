@@ -141,7 +141,7 @@ class MessageHandler {
 
         this.endModeration(chatID);
 
-        await this.bot.sendMessage(
+        await this.sendMessage(
             chatID,
             '⏰ Время на разбор (90 секунд) истекло, решение не принято.\n\nНажмите «👁 Посмотреть» в уведомлении, чтобы начать заново.'
         ).catch(() => {});
@@ -154,7 +154,7 @@ class MessageHandler {
         const until = await this.freezeModerator(chatID);
         const untilText = until ? ` до ${until.toLocaleString('ru-RU')}` : '';
 
-        await this.bot.sendMessage(
+        await this.sendMessage(
             chatID,
             `🚫 Неверный admin pin ключ ${keyNumber} введён ${this.maxKeyAttempts} раза. Аккаунт модератора заморожен на 24 часа${untilText}.`
         ).catch(() => {});
@@ -163,7 +163,7 @@ class MessageHandler {
     // Вызывается при нажатии «Принять» в приглашении: переводим чат в режим ввода кода.
     async startModeratorInviteInput(chatID, from = {}) {
         if (!this.moderatorService) {
-            await this.bot.sendMessage(chatID, '❌ Модерация временно недоступна.').catch(() => {});
+            await this.sendMessage(chatID, '❌ Модерация временно недоступна.').catch(() => {});
             return;
         }
 
@@ -173,7 +173,7 @@ class MessageHandler {
             name: from.first_name || null
         };
 
-        await this.bot.sendMessage(
+        await this.sendMessage(
             chatID,
             '🔢 Введите 4-значный код приглашения, который передал администратор:'
         ).catch(() => {});
@@ -190,7 +190,7 @@ class MessageHandler {
         const code = String(text || '').trim();
 
         if (!/^\d{4}$/.test(code)) {
-            await this.bot.sendMessage(
+            await this.sendMessage(
                 chatID,
                 '🔢 Код состоит из 4 цифр. Отправьте его одним сообщением (только цифры).'
             ).catch(() => {});
@@ -199,7 +199,7 @@ class MessageHandler {
 
         if (!this.moderatorService) {
             delete this.inviteStates[chatID];
-            await this.bot.sendMessage(chatID, '❌ Модерация временно недоступна.').catch(() => {});
+            await this.sendMessage(chatID, '❌ Модерация временно недоступна.').catch(() => {});
             return true;
         }
 
@@ -215,14 +215,14 @@ class MessageHandler {
                 if (state.attempts >= 3) {
                     delete this.inviteStates[chatID];
                     await this.moderatorService.declineInvite(chatID).catch(() => {});
-                    await this.bot.sendMessage(
+                    await this.sendMessage(
                         chatID,
                         '❌ Слишком много неверных попыток. Приглашение отменено.'
                     ).catch(() => {});
                     return true;
                 }
 
-                await this.bot.sendMessage(
+                await this.sendMessage(
                     chatID,
                     `❌ Неверный код. Осталось попыток: ${3 - state.attempts}.`
                 ).catch(() => {});
@@ -230,7 +230,7 @@ class MessageHandler {
             }
 
             delete this.inviteStates[chatID];
-            await this.bot.sendMessage(
+            await this.sendMessage(
                 chatID,
                 '❌ Приглашение не найдено или уже обработано.'
             ).catch(() => {});
@@ -242,7 +242,7 @@ class MessageHandler {
 
         await this.sendModeratorPinsFile(chatID, result.pin1, result.pin2);
 
-        await this.bot.sendMessage(
+        await this.sendMessage(
             chatID,
             '✅ Вы стали модератором. Теперь вам будут приходить жалобы на анкеты.\n\n' +
             'Разбор: «👁 Посмотреть» → ключ 1 → действие и причина → ключ 2.'
@@ -269,7 +269,7 @@ chat_id: ${chatID}
             );
         } catch (error) {
             console.error('Не удалось отправить файл с ключами модератора:', error.message);
-            await this.bot.sendMessage(chatID, text).catch(() => {});
+            await this.sendMessage(chatID, text).catch(() => {});
         }
     }
 
@@ -286,7 +286,7 @@ chat_id: ${chatID}
 Причина: ${report.reason}`;
 
         try {
-            await this.bot.sendMessage(modChatID, text, {
+            await this.sendMessage(modChatID, text, {
                 reply_markup: {
                     inline_keyboard: [[
                         { text: '👁 Посмотреть', callback_data: `report_view_${report.id}` }
@@ -327,7 +327,7 @@ ${user.description || ''}`;
                 return;
             }
 
-            await this.bot.sendMessage(chatID, profileText, buttons);
+            await this.sendMessage(chatID, profileText, buttons);
         } catch (error) {
             console.error('Ошибка показа анкеты модератору:', error.message);
         }
@@ -349,12 +349,12 @@ ${user.description || ''}`;
 
         if (state.step === 'pin1') {
             if (!text) {
-                await this.bot.sendMessage(chatID, '❌ Введите pin ключ текстом.');
+                await this.sendMessage(chatID, '❌ Введите pin ключ текстом.');
                 return true;
             }
 
             if (text.trim().startsWith('/')) {
-                await this.bot.sendMessage(
+                await this.sendMessage(
                     chatID,
                     '⛔ Отмена недоступна — разбор нужно довести до конца.\n\n🔐 Введите admin pin ключ 1:'
                 );
@@ -369,7 +369,7 @@ ${user.description || ''}`;
                     return true;
                 }
 
-                await this.bot.sendMessage(
+                await this.sendMessage(
                     chatID,
                     `❌ Неверный admin pin ключ 1. Осталось попыток: ${this.maxKeyAttempts - state.attempts}.`
                 );
@@ -384,7 +384,7 @@ ${user.description || ''}`;
 
             if (!report || report.status !== 'new' || !reportedUser) {
                 this.endModeration(chatID);
-                await this.bot.sendMessage(chatID, '❌ Жалоба больше недоступна для обработки.');
+                await this.sendMessage(chatID, '❌ Жалоба больше недоступна для обработки.');
                 return true;
             }
 
@@ -400,13 +400,13 @@ ${user.description || ''}`;
         }
 
         if (state.step === 'action') {
-            await this.bot.sendMessage(chatID, '👆 Нажмите одну из кнопок под анкетой.');
+            await this.sendMessage(chatID, '👆 Нажмите одну из кнопок под анкетой.');
             return true;
         }
 
         if (state.step === 'reason') {
             if (!text || !text.trim() || text.trim().startsWith('/')) {
-                await this.bot.sendMessage(chatID, '✍️ Напишите причину текстом.');
+                await this.sendMessage(chatID, '✍️ Напишите причину текстом.');
                 return true;
             }
 
@@ -414,18 +414,18 @@ ${user.description || ''}`;
             state.step = 'pin2';
             state.attempts = 0;
 
-            await this.bot.sendMessage(chatID, '🔐 Введите admin pin ключ 2 для подтверждения решения:');
+            await this.sendMessage(chatID, '🔐 Введите admin pin ключ 2 для подтверждения решения:');
             return true;
         }
 
         if (state.step === 'pin2') {
             if (!text) {
-                await this.bot.sendMessage(chatID, '❌ Введите pin ключ текстом.');
+                await this.sendMessage(chatID, '❌ Введите pin ключ текстом.');
                 return true;
             }
 
             if (text.trim().startsWith('/')) {
-                await this.bot.sendMessage(
+                await this.sendMessage(
                     chatID,
                     '⛔ Отмена недоступна — разбор нужно довести до конца.\n\n🔐 Введите admin pin ключ 2:'
                 );
@@ -440,7 +440,7 @@ ${user.description || ''}`;
                     return true;
                 }
 
-                await this.bot.sendMessage(
+                await this.sendMessage(
                     chatID,
                     `❌ Неверный admin pin ключ 2. Осталось попыток: ${this.maxKeyAttempts - state.attempts}.`
                 );
@@ -468,13 +468,13 @@ ${user.description || ''}`;
 
         if (!report) {
             this.endModeration(chatID);
-            await this.bot.sendMessage(chatID, '❌ Жалоба не найдена.');
+            await this.sendMessage(chatID, '❌ Жалоба не найдена.');
             return;
         }
 
         if (report.status !== 'new') {
             this.endModeration(chatID);
-            await this.bot.sendMessage(chatID, '❌ Жалоба уже обработана другим модератором.');
+            await this.sendMessage(chatID, '❌ Жалоба уже обработана другим модератором.');
             return;
         }
 
@@ -483,7 +483,7 @@ ${user.description || ''}`;
 
         if (!targetUser) {
             this.endModeration(chatID);
-            await this.bot.sendMessage(chatID, '❌ Пользователь не найден.');
+            await this.sendMessage(chatID, '❌ Пользователь не найден.');
             return;
         }
 
@@ -500,12 +500,12 @@ ${user.description || ''}`;
                 resolvedReason: state.reason
             });
 
-            await this.bot.sendMessage(
+            await this.sendMessage(
                 targetChatID,
                 `⛔ Вы были забанены.\n\nПричина: ${state.reason || 'не указана'}`
             ).catch(() => {});
 
-            await this.bot.sendMessage(chatID, '✅ Решение применено: пользователь забанен.');
+            await this.sendMessage(chatID, '✅ Решение применено: пользователь забанен.');
         } else if (state.action === 'warn') {
             const result = targetUser.applyWarning();
 
@@ -523,29 +523,29 @@ ${user.description || ''}`;
                 resolvedReason: state.reason
             });
 
-            await this.bot.sendMessage(
+            await this.sendMessage(
                 targetChatID,
                 `⚠️ Вы получили предупреждение.\n\nПричина: ${state.reason || 'не указана'}`
             ).catch(() => {});
 
             if (result.banned) {
-                await this.bot.sendMessage(
+                await this.sendMessage(
                     targetChatID,
                     '⛔ Вы набрали 3 предупреждения — доступ к боту закрыт. Вы забанены.'
                 ).catch(() => {});
-                await this.bot.sendMessage(chatID, `✅ Решение применено: предупреждение ${result.warnings}/3. Пользователь забанен.`);
+                await this.sendMessage(chatID, `✅ Решение применено: предупреждение ${result.warnings}/3. Пользователь забанен.`);
             } else {
-                await this.bot.sendMessage(chatID, `✅ Решение применено: предупреждение ${result.warnings}/3.`);
+                await this.sendMessage(chatID, `✅ Решение применено: предупреждение ${result.warnings}/3.`);
             }
         } else if (state.action === 'dismiss') {
             await this.reportService.setStatus(report.id, 'dismissed', {
                 resolvedBy: state.moderatorName,
                 resolvedAction: 'dismiss'
             });
-            await this.bot.sendMessage(chatID, '✅ Жалоба отклонена как ложное срабатывание.');
+            await this.sendMessage(chatID, '✅ Жалоба отклонена как ложное срабатывание.');
         } else {
             this.endModeration(chatID);
-            await this.bot.sendMessage(chatID, '❌ Неизвестное действие.');
+            await this.sendMessage(chatID, '❌ Неизвестное действие.');
             return;
         }
 
@@ -619,14 +619,14 @@ ${user.description || ''}`;
 
     async startDating(chatID) {
         if (!this.profileService.isProfileComplete(chatID)) {
-            await this.bot.sendMessage(chatID, '❌ Сначала необходимо завершить создание анкеты.');
+            await this.sendMessage(chatID, '❌ Сначала необходимо завершить создание анкеты.');
             return;
         }
 
         const match = this.matchingService.findMatch(chatID);
 
         if (!match) {
-            await this.bot.sendMessage(chatID, '😔 Пока не найдено подходящих анкет.');
+            await this.sendMessage(chatID, '😔 Пока не найдено подходящих анкет.');
             return;
         }
 
@@ -641,21 +641,84 @@ ${user.description || ''}`;
         };
     }
 
-    // Первое фото — с подписью и клавиатурой, остальные — одним альбомом.
-    // Отдельного сообщения-инструкции не отправляем.
-    async sendProfileWithKeyboard(chatID, user, caption, replyMarkup) {
-        await this.bot.sendPhoto(chatID, user.photos[0], {
-            caption,
-            reply_markup: replyMarkup
+    // Клавиатура в просмотре лайка: только «ответить / не ответить».
+    likeBackKeyboard() {
+        return {
+            keyboard: [['❤️', '❌']],
+            resize_keyboard: true
+        };
+    }
+
+    // Единая точка отправки текста. Нижняя клавиатура лайка/скипа должна
+    // быть видна только пока последнее сообщение — анкета, поэтому любое
+    // «постороннее» сообщение снимает её. Inline-кнопки Telegram не умеет
+    // совмещать со снятием клавиатуры, поэтому они вешаются вторым шагом.
+    async sendMessage(chatID, text, options = {}) {
+        const opts = { ...options };
+        const user = this.users[chatID];
+        const markup = opts.reply_markup;
+
+        // Сообщение само задаёт нижнюю клавиатуру — доверяем ему.
+        if (markup && (markup.keyboard || markup.remove_keyboard)) {
+            if (user) {
+                user.datingKeyboardActive = false;
+            }
+
+            return this.bot.sendMessage(chatID, text, opts);
+        }
+
+        if (!user || !user.datingKeyboardActive) {
+            return this.bot.sendMessage(chatID, text, opts);
+        }
+
+        user.datingKeyboardActive = false;
+
+        if (!markup) {
+            opts.reply_markup = { remove_keyboard: true };
+            return this.bot.sendMessage(chatID, text, opts);
+        }
+
+        const sent = await this.bot.sendMessage(chatID, text, {
+            ...opts,
+            reply_markup: { remove_keyboard: true }
         });
 
-        if (user.photos.length > 1) {
-            const rest = user.photos.slice(1).map(photo => ({
+        try {
+            await this.bot.editMessageReplyMarkup(markup, {
+                chat_id: chatID,
+                message_id: sent.message_id
+            });
+        } catch (error) {
+            // Inline-кнопки важнее косметики: если правка не удалась, шлём
+            // сообщение ещё раз уже с кнопками, чтобы не потерять их.
+            console.error('Не удалось вернуть inline-кнопки, повторяю сообщение:', error.message);
+            await this.bot.sendMessage(chatID, text, opts).catch(() => {});
+        }
+
+        return sent;
+    }
+
+    // Анкета: все фотографии уходят одним сообщением (альбомом), а подпись
+    // с клавиатурой действий — следующим. Отдельного сообщения-инструкции нет.
+    async sendProfileWithKeyboard(chatID, user, caption, replyMarkup) {
+        if (user.photos.length === 1) {
+            await this.bot.sendPhoto(chatID, user.photos[0], {
+                caption,
+                reply_markup: replyMarkup
+            });
+        } else {
+            const media = user.photos.map(photo => ({
                 type: 'photo',
                 media: photo
             }));
 
-            await this.bot.sendMediaGroup(chatID, rest);
+            await this.bot.sendMediaGroup(chatID, media);
+            await this.sendMessage(chatID, caption, { reply_markup: replyMarkup });
+        }
+
+        const viewer = this.users[chatID];
+        if (viewer) {
+            viewer.datingKeyboardActive = true;
         }
     }
 
@@ -668,7 +731,7 @@ ${user.description || ''}`;
         }
 
         if (!user || !user.photos || user.photos.length === 0) {
-            await this.bot.sendMessage(chatID, '❌ Не удалось загрузить анкету. Попробуйте позже.');
+            await this.sendMessage(chatID, '❌ Не удалось загрузить анкету. Попробуйте позже.');
             return;
         }
 
@@ -681,13 +744,13 @@ ${user.description || ''}`;
             await this.sendProfileWithKeyboard(chatID, user, profileText, this.datingKeyboard());
         } catch (error) {
             console.error('Ошибка отправки анкеты:', error.message);
-            await this.bot.sendMessage(chatID, '❌ Не удалось отправить анкету. Попробуйте позже.');
+            await this.sendMessage(chatID, '❌ Не удалось отправить анкету. Попробуйте позже.');
         }
     }
 
     async sendProfile(chatID, user) {
         if (!user || !user.photos || user.photos.length === 0) {
-            await this.bot.sendMessage(chatID, '❌ В анкете нет фотографий.');
+            await this.sendMessage(chatID, '❌ В анкете нет фотографий.');
             return;
         }
 
@@ -698,10 +761,29 @@ ${user.description || ''}`;
 
         try {
             if (user.photos.length === 1) {
-                await this.bot.sendPhoto(chatID, user.photos[0], {
+                const needClear = Boolean(user.datingKeyboardActive);
+                const sent = await this.bot.sendPhoto(chatID, user.photos[0], {
                     caption: profileText,
-                    reply_markup: this.buildProfileMenu(user)
+                    reply_markup: needClear
+                        ? { remove_keyboard: true }
+                        : this.buildProfileMenu(user)
                 });
+
+                if (needClear) {
+                    user.datingKeyboardActive = false;
+                    try {
+                        await this.bot.editMessageReplyMarkup(this.buildProfileMenu(user), {
+                            chat_id: chatID,
+                            message_id: sent.message_id
+                        });
+                    } catch (error) {
+                        console.error('Не удалось вернуть inline-кнопки:', error.message);
+                        await this.sendMessage(chatID, 'Управление анкетой:', {
+                            reply_markup: this.buildProfileMenu(user)
+                        }).catch(() => {});
+                    }
+                }
+
                 return;
             }
 
@@ -714,13 +796,13 @@ ${user.description || ''}`;
             const sentMessages = await this.bot.sendMediaGroup(chatID, media);
             const lastMessage = sentMessages[sentMessages.length - 1];
 
-            await this.bot.sendMessage(chatID, 'Управление анкетой:', {
+            await this.sendMessage(chatID, 'Управление анкетой:', {
                 reply_markup: this.buildProfileMenu(user),
                 reply_to_message_id: lastMessage.message_id
             });
         } catch (error) {
             console.error('Ошибка показа собственной анкеты:', error.message);
-            await this.bot.sendMessage(chatID, '❌ Не удалось показать анкету. Попробуйте позже.');
+            await this.sendMessage(chatID, '❌ Не удалось показать анкету. Попробуйте позже.');
         }
     }
 
@@ -733,7 +815,7 @@ ${user.description || ''}`;
         }
 
         if (!user || !user.photos || user.photos.length === 0) {
-            await this.bot.sendMessage(chatID, 'Не удалось загрузить анкету пользователя.');
+            await this.sendMessage(chatID, 'Не удалось загрузить анкету пользователя.');
             return;
         }
 
@@ -749,10 +831,10 @@ ${user.description || ''}${incoming}
 Симпатия взаимна?`;
 
         try {
-            await this.sendProfileWithKeyboard(chatID, user, profileText, this.datingKeyboard());
+            await this.sendProfileWithKeyboard(chatID, user, profileText, this.likeBackKeyboard());
         } catch (error) {
             console.error('Ошибка показа анкеты лайкнувшего:', error.message);
-            await this.bot.sendMessage(chatID, '❌ Не удалось показать анкету. Попробуйте позже.');
+            await this.sendMessage(chatID, '❌ Не удалось показать анкету. Попробуйте позже.');
         }
     }
 
@@ -787,7 +869,7 @@ ${user.description || ''}${incoming}
         const nextProfile = this.matchingService.findMatch(chatID);
 
         if (!nextProfile) {
-            await this.bot.sendMessage(chatID, '😔 Пока больше нет подходящих анкет.', {
+            await this.sendMessage(chatID, '😔 Пока больше нет подходящих анкет.', {
                 reply_markup: { remove_keyboard: true }
             });
             return;
@@ -797,7 +879,7 @@ ${user.description || ''}${incoming}
     }
 
     async notifyUserLike(fromChatID, toChatID) {
-        await this.bot.sendMessage(
+        await this.sendMessage(
             toChatID,
             '❤️ Вы понравились одному человеку!\n\nХотите посмотреть его анкету?',
             {
@@ -824,12 +906,12 @@ ${user.description || ''}${incoming}
         const result = this.likeService.createMatch(chatID, otherChatID);
 
         if (!result.success) {
-            await this.bot.sendMessage(chatID, result.message || 'Не удалось создать мэтч.');
+            await this.sendMessage(chatID, result.message || 'Не удалось создать мэтч.');
             return;
         }
 
         if (result.alreadyMatched) {
-            await this.bot.sendMessage(chatID, '❤️ Мэтч уже создан.');
+            await this.sendMessage(chatID, '❤️ Мэтч уже создан.');
             return;
         }
 
@@ -850,7 +932,7 @@ Telegram: ${currentUsername}`
             });
         }
 
-        await this.bot.sendMessage(
+        await this.sendMessage(
             chatID,
             `🎉 Это мэтч!\n\n❤️ Вы понравились друг другу!\n\nTelegram пользователя: ${otherUsername}`
         );
@@ -864,7 +946,7 @@ Telegram: ${currentUsername}`
 
         if (!user || !targetUser ||
             (this.profileService && !this.profileService.isProfileComplete(chatID))) {
-            await this.bot.sendMessage(chatID, '❌ Анкета больше недоступна. Откройте ленту заново — /lenta.');
+            await this.sendMessage(chatID, '❌ Анкета больше недоступна. Откройте ленту заново — /lenta.');
             return;
         }
 
@@ -877,7 +959,7 @@ Telegram: ${currentUsername}`
         if (action === '💌') {
             user.pendingMessageTo = target;
 
-            await this.bot.sendMessage(
+            await this.sendMessage(
                 chatID,
                 `💌 Напишите сообщение для ${targetUser.name}.`
             );
@@ -887,7 +969,7 @@ Telegram: ${currentUsername}`
         const result = this.likeService.sendLike(chatID, target);
 
         if (!result.success) {
-            await this.bot.sendMessage(chatID, result.message || 'Не удалось поставить лайк.');
+            await this.sendMessage(chatID, result.message || 'Не удалось поставить лайк.');
             return;
         }
 
@@ -897,7 +979,7 @@ Telegram: ${currentUsername}`
         }
 
         if (!result.alreadyLiked) {
-            await this.bot.sendMessage(chatID, '❤️ Лайк отправлен! Ждём ответа.');
+            await this.sendMessage(chatID, '❤️ Лайк отправлен! Ждём ответа.');
             await this.notifyUserLike(chatID, target);
         }
 
@@ -913,13 +995,13 @@ Telegram: ${currentUsername}`
 
         if (!targetUser) {
             user.pendingMessageTo = null;
-            await this.bot.sendMessage(chatID, '❌ Анкета больше недоступна.');
+            await this.sendMessage(chatID, '❌ Анкета больше недоступна.');
             return;
         }
 
         if (!this.messageService) {
             user.pendingMessageTo = null;
-            await this.bot.sendMessage(chatID, '❌ Отправка сообщений временно недоступна.');
+            await this.sendMessage(chatID, '❌ Отправка сообщений временно недоступна.');
             return;
         }
 
@@ -930,7 +1012,7 @@ Telegram: ${currentUsername}`
 
         // При ошибке ожидание сохраняется — можно повторить ввод.
         if (!saved.success) {
-            await this.bot.sendMessage(chatID, saved.message || '❌ Не удалось отправить сообщение.');
+            await this.sendMessage(chatID, saved.message || '❌ Не удалось отправить сообщение.');
             return;
         }
 
@@ -946,7 +1028,7 @@ Telegram: ${currentUsername}`
         }
 
         user.pendingMessageTo = null;
-        await this.bot.sendMessage(chatID, '💌 Ваше сообщение отправлено.');
+        await this.sendMessage(chatID, '💌 Ваше сообщение отправлено.');
         await this.showNextProfile(chatID);
     }
 
@@ -982,7 +1064,7 @@ Telegram: ${currentUsername}`
 
                 if (user?.waitingForAge &&
                     (text === '👨 Мужской' || text === '👩 Женский')) {
-                    await this.bot.sendMessage(chatID, '❌ Сейчас нужно ввести возраст числом.');
+                    await this.sendMessage(chatID, '❌ Сейчас нужно ввести возраст числом.');
                     return;
                 }
 
@@ -991,7 +1073,7 @@ Telegram: ${currentUsername}`
                     if (!text || text.startsWith('/') ||
                         text === '❤️' || text === '💌' || text === '❌') {
                         user.pendingMessageTo = null;
-                        await this.bot.sendMessage(chatID, '❌ Отправка сообщения отменена.');
+                        await this.sendMessage(chatID, '❌ Отправка сообщения отменена.');
                         return;
                     }
 
@@ -1005,9 +1087,10 @@ Telegram: ${currentUsername}`
                         msg.from.username || null
                     );
 
-                    await this.bot.sendMessage(
+                    await this.sendMessage(
                         chatID,
-                        'Привет! Это IdeologyDatingBot. Здесь ты сможешь найти друзей или вторую половинку на основании общих взглядов, ценностей и мировоззрения.\n\nВведите инвайт-код для входа в систему:'
+                        'Привет! Это IdeologyDatingBot. Здесь ты сможешь найти друзей или вторую половинку на основании общих взглядов, ценностей и мировоззрения.\n\nВведите инвайт-код для входа в систему:',
+                        { reply_markup: { remove_keyboard: true } }
                     );
                     return;
                 }
@@ -1023,7 +1106,7 @@ Telegram: ${currentUsername}`
 
                 if (user.reportReasonPending) {
                     if (!text) {
-                        await this.bot.sendMessage(
+                        await this.sendMessage(
                             chatID,
                             '❌ Пожалуйста, напишите причину текстом.'
                         );
@@ -1031,7 +1114,7 @@ Telegram: ${currentUsername}`
                     }
 
                     if (text.startsWith('/')) {
-                        await this.bot.sendMessage(
+                        await this.sendMessage(
                             chatID,
                             '❌ Это команда, а не причина.\n\nНапишите текстом, что именно нарушает анкета.'
                         );
@@ -1052,11 +1135,11 @@ Telegram: ${currentUsername}`
                     user.reportReasonPending = false;
 
                     if (!result.success) {
-                        await this.bot.sendMessage(chatID, result.message);
+                        await this.sendMessage(chatID, result.message);
                         return;
                     }
 
-                    await this.bot.sendMessage(
+                    await this.sendMessage(
                         chatID,
                         '✅ Жалоба отправлена. Спасибо, мы рассмотрим её.',
                         {
@@ -1091,7 +1174,7 @@ Telegram: ${currentUsername}`
                 if (user.waitingForEditDescription) {
                     if (text === 'Оставить как есть') {
                         this.registrationService.cancelDescriptionEdit(chatID);
-                        await this.bot.sendMessage(
+                        await this.sendMessage(
                             chatID,
                             '✅ Описание осталось прежним.',
                             { reply_markup: { remove_keyboard: true } }
@@ -1101,7 +1184,7 @@ Telegram: ${currentUsername}`
                     }
 
                     if (text && text.startsWith('/')) {
-                        await this.bot.sendMessage(
+                        await this.sendMessage(
                             chatID,
                             '❌ Это команда, а не описание.\n\nОтправьте текст описания или нажмите «Оставить как есть».'
                         );
@@ -1111,14 +1194,14 @@ Telegram: ${currentUsername}`
                     const result = this.registrationService.updateDescription(chatID, text);
 
                     if (!result.success) {
-                        await this.bot.sendMessage(
+                        await this.sendMessage(
                             chatID,
                             result.message || 'Не удалось сохранить описание. Попробуйте ещё раз.'
                         );
                         return;
                     }
 
-                    await this.bot.sendMessage(
+                    await this.sendMessage(
                         chatID,
                         '✅ Описание обновлено.',
                         { reply_markup: { remove_keyboard: true } }
@@ -1130,7 +1213,7 @@ Telegram: ${currentUsername}`
                 if (user.waitingForEditPhotos) {
                     if (text === 'Оставить как есть') {
                         this.registrationService.cancelPhotoEdit(chatID);
-                        await this.bot.sendMessage(
+                        await this.sendMessage(
                             chatID,
                             '✅ Фотографии остались прежними.',
                             { reply_markup: { remove_keyboard: true } }
@@ -1143,11 +1226,11 @@ Telegram: ${currentUsername}`
                         const result = this.registrationService.finishPhotoEdit(chatID);
 
                         if (!result.success) {
-                            await this.bot.sendMessage(chatID, result.message);
+                            await this.sendMessage(chatID, result.message);
                             return;
                         }
 
-                        await this.bot.sendMessage(
+                        await this.sendMessage(
                             chatID,
                             '✅ Фотографии обновлены.',
                             { reply_markup: { remove_keyboard: true } }
@@ -1157,7 +1240,7 @@ Telegram: ${currentUsername}`
                     }
 
                     if (!msg.photo || msg.photo.length === 0) {
-                        await this.bot.sendMessage(
+                        await this.sendMessage(
                             chatID,
                             '❌ Отправьте фотографию или нажмите «Оставить как есть».'
                         );
@@ -1169,19 +1252,19 @@ Telegram: ${currentUsername}`
                     const moderation = await this.imageModerationService.moderateFile(photo);
 
                     if (!moderation.ok) {
-                        await this.bot.sendMessage(chatID, this.imageModerationRejectMessage(moderation.reason));
+                        await this.sendMessage(chatID, this.imageModerationRejectMessage(moderation.reason));
                         return;
                     }
 
                     const result = this.registrationService.addEditPhoto(chatID, photo);
 
                     if (!result.success) {
-                        await this.bot.sendMessage(chatID, result.message);
+                        await this.sendMessage(chatID, result.message);
                         return;
                     }
 
                     if (result.completed) {
-                        await this.bot.sendMessage(
+                        await this.sendMessage(
                             chatID,
                             '✅ Фотографии обновлены.',
                             { reply_markup: { remove_keyboard: true } }
@@ -1190,7 +1273,7 @@ Telegram: ${currentUsername}`
                         return;
                     }
 
-                    await this.bot.sendMessage(
+                    await this.sendMessage(
                         chatID,
                         `✅ Фото добавлено. Сейчас загружено: ${result.user.editPhotos.length}/3.\n\nОтправьте ещё фотографии или нажмите «Готово».`,
                         {
@@ -1208,11 +1291,11 @@ Telegram: ${currentUsername}`
                     const result = this.registrationService.validateInvite(chatID, text);
 
                     if (!result.success) {
-                        await this.bot.sendMessage(chatID, result.message);
+                        await this.sendMessage(chatID, result.message);
                         return;
                     }
 
-                    await this.bot.sendMessage(
+                    await this.sendMessage(
                         chatID,
                         '✅ Инвайт-код принят! Вы успешно вошли в систему.\n\n👤 Давайте создадим ваш профиль.\n\nКак вас зовут?'
                     );
@@ -1223,14 +1306,14 @@ Telegram: ${currentUsername}`
                     const result = this.registrationService.setName(chatID, text);
 
                     if (!result.success) {
-                        await this.bot.sendMessage(
+                        await this.sendMessage(
                             chatID,
                             result.message || '❌ Не удалось сохранить имя. Попробуйте ещё раз.'
                         );
                         return;
                     }
 
-                    await this.bot.sendMessage(
+                    await this.sendMessage(
                         chatID,
                         `Отлично, ${result.user.name}! Ваше имя сохранено.\n\nТеперь выберите ваш пол:`,
                         {
@@ -1248,14 +1331,14 @@ Telegram: ${currentUsername}`
                     const result = this.registrationService.setGender(chatID, text);
 
                     if (!result.success) {
-                        await this.bot.sendMessage(
+                        await this.sendMessage(
                             chatID,
                             result.message || 'Не удалось сохранить пол. Попробуйте ещё раз.'
                         );
                         return;
                     }
 
-                    await this.bot.sendMessage(
+                    await this.sendMessage(
                         chatID,
                         '✅ Пол сохранён.\n\n👀 Кого вы хотите найти?\n\nЭто влияет на то, кого видите вы, и кто может видеть вашу анкету.',
                         {
@@ -1273,14 +1356,14 @@ Telegram: ${currentUsername}`
                     const result = this.registrationService.setLookingFor(chatID, text);
 
                     if (!result.success) {
-                        await this.bot.sendMessage(
+                        await this.sendMessage(
                             chatID,
                             result.message || 'Пожалуйста, выберите один из вариантов с помощью кнопок.'
                         );
                         return;
                     }
 
-                    await this.bot.sendMessage(
+                    await this.sendMessage(
                         chatID,
                         '✅ Сохранено.\n\n🎂 Сколько вам лет?\n\nМинимальный возраст для регистрации — 16 лет.\n\n⚠️ Пожалуйста, указывайте реальный возраст. Подделка возраста недопустима.',
                         { reply_markup: { remove_keyboard: true } }
@@ -1292,14 +1375,14 @@ Telegram: ${currentUsername}`
                     const result = this.registrationService.setAge(chatID, text);
 
                     if (!result.success) {
-                        await this.bot.sendMessage(
+                        await this.sendMessage(
                             chatID,
                             result.message || 'Не удалось сохранить возраст. Попробуйте ещё раз.'
                         );
                         return;
                     }
 
-                    await this.bot.sendMessage(
+                    await this.sendMessage(
                         chatID,
                         '✅ Возраст сохранён.\n\n🌍 В каком городе вы живёте?\n\nВведите название города или выберите «🌍 Глобал», чтобы искать по всему миру. Глобальные пользователи видят анкеты из всех городов, и их видят все.',
                         {
@@ -1318,14 +1401,14 @@ Telegram: ${currentUsername}`
                         : this.registrationService.setDescription(chatID, text);
 
                     if (!result.success) {
-                        await this.bot.sendMessage(
+                        await this.sendMessage(
                             chatID,
                             result.message || 'Не удалось сохранить описание. Попробуйте ещё раз.'
                         );
                         return;
                     }
 
-                    await this.bot.sendMessage(
+                    await this.sendMessage(
                         chatID,
                         '✅ Описание сохранено.\n\n📸 Теперь отправьте от 1 до 3 фотографий для вашей анкеты.',
                         this.photoPromptOptions(result.user)
@@ -1337,7 +1420,7 @@ Telegram: ${currentUsername}`
                     const result = this.registrationService.setCity(chatID, text);
 
                     if (!result.success) {
-                        await this.bot.sendMessage(
+                        await this.sendMessage(
                             chatID,
                             result.message || 'Не удалось сохранить город. Попробуйте ещё раз.'
                         );
@@ -1349,7 +1432,7 @@ Telegram: ${currentUsername}`
                         : [['Пропустить']];
 
                     if (result.user.isGlobal) {
-                        await this.bot.sendMessage(
+                        await this.sendMessage(
                             chatID,
                             '✅ Вы выбрали «🌍 Глобал» — вам будут показываться анкеты со всего мира.\n\n📝 Расскажите немного о себе.\n\nОписание необязательно. Максимальная длина — 400 символов.',
                             {
@@ -1363,7 +1446,7 @@ Telegram: ${currentUsername}`
                         return;
                     }
 
-                    await this.bot.sendMessage(
+                    await this.sendMessage(
                         chatID,
                         '✅ Город сохранён.\n\n📝 Расскажите немного о себе.\n\nОписание необязательно. Максимальная длина — 400 символов.',
                         {
@@ -1382,11 +1465,11 @@ Telegram: ${currentUsername}`
                         const result = this.registrationService.finishPhotos(chatID);
 
                         if (!result.success) {
-                            await this.bot.sendMessage(chatID, result.message);
+                            await this.sendMessage(chatID, result.message);
                             return;
                         }
 
-                        await this.bot.sendMessage(
+                        await this.sendMessage(
                             chatID,
                             '🎉 Поздравляем! Ваша анкета успешно создана.',
                             { reply_markup: { remove_keyboard: true } }
@@ -1399,11 +1482,11 @@ Telegram: ${currentUsername}`
                         const result = this.registrationService.keepPreviousPhotos(chatID);
 
                         if (!result.success) {
-                            await this.bot.sendMessage(chatID, result.message);
+                            await this.sendMessage(chatID, result.message);
                             return;
                         }
 
-                        await this.bot.sendMessage(
+                        await this.sendMessage(
                             chatID,
                             '🎉 Поздравляем! Ваша анкета успешно создана.',
                             { reply_markup: { remove_keyboard: true } }
@@ -1413,7 +1496,7 @@ Telegram: ${currentUsername}`
                     }
 
                     if (!msg.photo || msg.photo.length === 0) {
-                        await this.bot.sendMessage(
+                        await this.sendMessage(
                             chatID,
                             '❌ Пожалуйста, отправьте фотографию или нажмите «Готово».'
                         );
@@ -1425,19 +1508,19 @@ Telegram: ${currentUsername}`
                     const moderation = await this.imageModerationService.moderateFile(photo);
 
                     if (!moderation.ok) {
-                        await this.bot.sendMessage(chatID, this.imageModerationRejectMessage(moderation.reason));
+                        await this.sendMessage(chatID, this.imageModerationRejectMessage(moderation.reason));
                         return;
                     }
 
                     const result = this.registrationService.addPhoto(chatID, photo);
 
                     if (!result.success) {
-                        await this.bot.sendMessage(chatID, result.message);
+                        await this.sendMessage(chatID, result.message);
                         return;
                     }
 
                     if (result.completed) {
-                        await this.bot.sendMessage(
+                        await this.sendMessage(
                             chatID,
                             '🎉 Поздравляем! Ваша анкета успешно создана.',
                             { reply_markup: { remove_keyboard: true } }
@@ -1446,7 +1529,7 @@ Telegram: ${currentUsername}`
                         return;
                     }
 
-                    await this.bot.sendMessage(
+                    await this.sendMessage(
                         chatID,
                         `✅ Фото добавлено. Сейчас загружено: ${result.user.photos.length}/3.\n\nМожете отправить ещё фотографии или нажать «Готово».`,
                         {
@@ -1469,19 +1552,19 @@ Telegram: ${currentUsername}`
 
                 if (text === '/report') {
                     if (!this.reportService) {
-                        await this.bot.sendMessage(chatID, '🚧 Жалобы пока не доступны. Попробуйте позже.');
+                        await this.sendMessage(chatID, '🚧 Жалобы пока не доступны. Попробуйте позже.');
                         return;
                     }
 
                     if (!this.profileService.isProfileComplete(chatID)) {
-                        await this.bot.sendMessage(chatID, '❌ Сначала необходимо завершить создание анкеты.');
+                        await this.sendMessage(chatID, '❌ Сначала необходимо завершить создание анкеты.');
                         return;
                     }
 
                     const targetChatID = user.lastShownProfileID;
 
                     if (!targetChatID || !this.users[targetChatID]) {
-                        await this.bot.sendMessage(
+                        await this.sendMessage(
                             chatID,
                             '🚫 Не найдено анкеты для жалобы.\n\nСначала посмотрите анкету в ленте — /lenta.'
                         );
@@ -1490,7 +1573,7 @@ Telegram: ${currentUsername}`
 
                     user.reportReasonPending = true;
 
-                    await this.bot.sendMessage(
+                    await this.sendMessage(
                         chatID,
                         '🚩 Укажите причину репорта.\n\nНапишите текстом, что именно в этой анкете нарушает правила.'
                     );
@@ -1499,7 +1582,7 @@ Telegram: ${currentUsername}`
 
                 if (text === '/myprofile') {
                     if (!this.profileService.isProfileComplete(chatID)) {
-                        await this.bot.sendMessage(chatID, '❌ Вы ещё не завершили создание анкеты.');
+                        await this.sendMessage(chatID, '❌ Вы ещё не завершили создание анкеты.');
                         return;
                     }
 
@@ -1513,7 +1596,7 @@ Telegram: ${currentUsername}`
                 }
             } catch (error) {
                 console.error('Ошибка обработки сообщения:', error);
-                await this.bot.sendMessage(chatID, '❌ Произошла ошибка. Попробуйте ещё раз.').catch(() => {});
+                await this.sendMessage(chatID, '❌ Произошла ошибка. Попробуйте ещё раз.').catch(() => {});
             }
         });
 
@@ -1557,7 +1640,7 @@ Telegram: ${currentUsername}`
                     if (data === 'mod_invite_decline') {
                         await this.moderatorService.declineInvite(chatID).catch(() => {});
                         await this.bot.answerCallbackQuery(query.id, { text: 'Вы отказались.' }).catch(() => {});
-                        await this.bot.sendMessage(chatID, '❌ Вы отказались стать модератором.').catch(() => {});
+                        await this.sendMessage(chatID, '❌ Вы отказались стать модератором.').catch(() => {});
                         return;
                     }
 
@@ -1592,7 +1675,7 @@ Telegram: ${currentUsername}`
                         { inline_keyboard: [] },
                         { chat_id: chatID, message_id: query.message.message_id }
                     ).catch(() => {});
-                    await this.bot.sendMessage(chatID, 'Вы отклонили лайк.');
+                    await this.sendMessage(chatID, 'Вы отклонили лайк.');
                     return;
                 }
 
@@ -1656,7 +1739,7 @@ Telegram: ${currentUsername}`
                         { chat_id: chatID, message_id: query.message.message_id }
                     ).catch(() => {});
                     await this.bot.answerCallbackQuery(query.id, { text: 'Введите admin pin ключ 1.' });
-                    await this.bot.sendMessage(
+                    await this.sendMessage(
                         chatID,
                         '🔐 Введите admin pin ключ 1 для просмотра анкеты:'
                     );
@@ -1725,7 +1808,7 @@ Telegram: ${currentUsername}`
                         await this.bot.answerCallbackQuery(query.id, {
                             text: action === 'ban' ? 'Укажите причину бана.' : 'Укажите причину варна.'
                         });
-                        await this.bot.sendMessage(
+                        await this.sendMessage(
                             chatID,
                             `✍️ Укажите текстом причину ${action === 'ban' ? 'бана' : 'предупреждения'}:`
                         );
@@ -1735,7 +1818,7 @@ Telegram: ${currentUsername}`
                         state.attempts = 0;
 
                         await this.bot.answerCallbackQuery(query.id, { text: 'Подтвердите решение.' });
-                        await this.bot.sendMessage(
+                        await this.sendMessage(
                             chatID,
                             '✅ Помечено как ложное срабатывание.\n\n🔐 Введите admin pin ключ 2 для подтверждения:'
                         );
@@ -1771,7 +1854,7 @@ Telegram: ${currentUsername}`
                         { chat_id: chatID, message_id: query.message.message_id }
                     ).catch(() => {});
 
-                    await this.bot.sendMessage(
+                    await this.sendMessage(
                         chatID,
                         '♻️ Заполняем анкету заново.\n\n👤 Как вас зовут?',
                         { reply_markup: { remove_keyboard: true } }
@@ -1795,7 +1878,7 @@ Telegram: ${currentUsername}`
                         { chat_id: chatID, message_id: query.message.message_id }
                     ).catch(() => {});
 
-                    await this.bot.sendMessage(
+                    await this.sendMessage(
                         chatID,
                         '✏️ Отправьте новое описание.\n\nМаксимальная длина — 400 символов.',
                         {
@@ -1825,7 +1908,7 @@ Telegram: ${currentUsername}`
                         { chat_id: chatID, message_id: query.message.message_id }
                     ).catch(() => {});
 
-                    await this.bot.sendMessage(
+                    await this.sendMessage(
                         chatID,
                         '📸 Отправьте новые фотографии (от 1 до 3).\n\nНовые фотографии заменят текущие после нажатия «Готово».',
                         {
@@ -1843,7 +1926,7 @@ Telegram: ${currentUsername}`
                     const profileMessageID = query.message.message_id;
 
                     await this.bot.answerCallbackQuery(query.id);
-                    await this.bot.sendMessage(
+                    await this.sendMessage(
                         chatID,
                         '🙈 Вашу анкету не будет видно, все кто поставил вам лайк — не смогут вам ответить.\n\nВы уверены, что хотите убрать анкету из поиска?',
                         {
@@ -1862,7 +1945,7 @@ Telegram: ${currentUsername}`
                     const profileMessageID = query.message.message_id;
 
                     await this.bot.answerCallbackQuery(query.id);
-                    await this.bot.sendMessage(
+                    await this.sendMessage(
                         chatID,
                         '👁 Вы уверены, что хотите вернуть анкету в поиск?',
                         {
@@ -1894,7 +1977,7 @@ Telegram: ${currentUsername}`
                         { inline_keyboard: this.buildProfileMenu(result.user).inline_keyboard },
                         { chat_id: chatID, message_id: profileMessageID }
                     ).catch(() => {});
-                    await this.bot.sendMessage(chatID, '🙈 Ваша анкета удалена из поиска.');
+                    await this.sendMessage(chatID, '🙈 Ваша анкета удалена из поиска.');
                     return;
                 }
 
@@ -1921,7 +2004,7 @@ Telegram: ${currentUsername}`
                         { inline_keyboard: this.buildProfileMenu(result.user).inline_keyboard },
                         { chat_id: chatID, message_id: profileMessageID }
                     ).catch(() => {});
-                    await this.bot.sendMessage(chatID, '👁 Ваша анкета снова в поиске.');
+                    await this.sendMessage(chatID, '👁 Ваша анкета снова в поиске.');
                     return;
                 }
 
@@ -1965,7 +2048,7 @@ Telegram: ${currentUsername}`
                         { chat_id: chatID, message_id: query.message.message_id }
                     ).catch(() => {});
 
-                    await this.bot.sendMessage(
+                    await this.sendMessage(
                         chatID,
                         'Вы пропустили эту анкету. Продолжайте знакомиться в /lenta!'
                     );
@@ -1991,7 +2074,7 @@ Telegram: ${currentUsername}`
                     const nextProfile = this.matchingService.findMatch(chatID);
 
                     if (!nextProfile) {
-                        await this.bot.sendMessage(chatID, '😔 Пока больше нет подходящих анкет.');
+                        await this.sendMessage(chatID, '😔 Пока больше нет подходящих анкет.');
                         return;
                     }
 
@@ -2016,12 +2099,12 @@ Telegram: ${currentUsername}`
                     const result = this.likeService.sendLike(chatID, otherChatID);
 
                     if (!result.success) {
-                        await this.bot.sendMessage(chatID, result.message);
+                        await this.sendMessage(chatID, result.message);
                         return;
                     }
 
                     if (!result.alreadyLiked) {
-                        await this.bot.sendMessage(chatID, '❤️ Лайк отправлен! Ждём ответа.');
+                        await this.sendMessage(chatID, '❤️ Лайк отправлен! Ждём ответа.');
                         await this.notifyUserLike(chatID, otherChatID);
                     }
 
