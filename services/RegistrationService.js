@@ -137,6 +137,13 @@ setName(chatID, text) {
             message: '❌ Имя должно содержать хотя бы одну букву.\n\nПопробуйте ещё раз.\n'
         }
     }
+    // Текст не должен начинаться с «/», иначе он выглядит как команда.
+    if (String(text).trim().startsWith('/')) {
+        return {
+            success: false,
+            message: '❌ Имя не может начинаться с «/». Попробуйте другое имя.'
+        }
+    }
     const nameCheck = this.contentFilter.check(text)
     if (!nameCheck.ok) {
         return {
@@ -230,6 +237,13 @@ applyDescription(user, text) {
         return {
             ok: false,
             message: '❌ Описание слишком длинное. Максимальная длина — 400 символов.'
+        }
+    }
+    // Текст не должен начинаться с «/», иначе он выглядит как команда.
+    if (String(text).trim().startsWith('/')) {
+        return {
+            ok: false,
+            message: '❌ Описание не может начинаться с «/». Перепишите описание.'
         }
     }
     const descriptionCheck = this.contentFilter.check(text)

@@ -1333,8 +1333,30 @@ Telegram: ${currentUsername}`
                 }
 
                 if (text === '/start' || (typeof text === 'string' && text.startsWith('/start '))) {
-                    const isNewUser = !this.users[Number(chatID)];
                     const payload = text.slice('/start'.length).trim();
+                    const existingUser = this.users[Number(chatID)];
+                    const referrerID = this.referralService
+                        ? this.referralService.parseStartPayload(payload)
+                        : null;
+
+                    // Реферальная ссылка — только для новых пользователей. У того,
+                    // у кого уже есть готовая анкета, ссылка не должна срабатывать
+                    // и не должна сбрасывать анкету.
+                    if (referrerID && existingUser && this.profileService &&
+                        this.profileService.isProfileComplete(chatID)) {
+                        await this.sendWithInline(
+                            chatID,
+                            '❌ По этой ссылке можно пригласить только нового пользователя.\n\nУ вас уже есть анкета — она сохранена.',
+                            {
+                                inline_keyboard: [[
+                                    { text: '🔎 Продолжить поиск', callback_data: 'menu_lenta' }
+                                ]]
+                            }
+                        );
+                        return;
+                    }
+
+                    const isNewUser = !existingUser;
 
                     this.registrationService.startRegistration(
                         chatID,
@@ -1344,10 +1366,6 @@ Telegram: ${currentUsername}`
                     // Приход по реферальной ссылке (/start ref_<id>): запоминаем
                     // пригласившего только для нового пользователя. В счётчик это
                     // попадёт после того, как он заполнит анкету.
-                    const referrerID = this.referralService
-                        ? this.referralService.parseStartPayload(payload)
-                        : null;
-
                     if (referrerID && isNewUser && this.users[referrerID]) {
                         await this.referralService
                             .registerVisit(referrerID, chatID)
