@@ -4,7 +4,7 @@ const crypto = require('crypto')
 // Консольная админ-панель: вход по имени администратора и его личному паролю,
 // далее — локальное меню. Действия выполняются через ModerationActionsService.
 class ModerationConsole {
-    constructor({ input, output, accounts = [], userRepository = null, moderationActions = null, reportService = null, notifier = null, moderatorChatIDs = [], moderationActionRepository = null, moderatorService = null, supportTicketService = null, devHistoryService = null }) {
+    constructor({ input, output, accounts = [], userRepository = null, moderationActions = null, reportService = null, notifier = null, moderatorChatIDs = [], moderationActionRepository = null, moderatorService = null, supportTicketService = null, devHistoryService = null, broadcastService = null, broadcastRepository = null }) {
         this.input = input
         this.output = output
         // Имена администраторов сравниваем без учёта регистра
@@ -23,6 +23,8 @@ class ModerationConsole {
         this.moderatorService = moderatorService
         this.supportTicketService = supportTicketService
         this.devHistoryService = devHistoryService
+        this.broadcastService = broadcastService
+        this.broadcastRepository = broadcastRepository
         // Кэш счётчика непрочитанных тикетов. Обращение к БД на каждой отрисовке
         // меню ощутимо тормозит консоль (особенно с удалённой базой), поэтому
         // счётчик рисуется из кэша, а обновляется в фоне.
@@ -65,6 +67,7 @@ class ModerationConsole {
         this.MODERATORS_PER_PAGE = 50
         this.TICKETS_PER_PAGE = 50
         this.DEV_HISTORY_PER_PAGE = 50
+        this.BROADCASTS_PER_PAGE = 50
     }
 
     close() {
@@ -167,13 +170,19 @@ class ModerationConsole {
                 continue
             }
 
+            // Пункт 8 — радио (рассылки)
+            if (choice === '8') {
+                await this.showRadioList(account)
+                continue
+            }
+
             if (this.menuItems.has(choice)) {
                 const section = this.menuItems.get(choice)
                 this.output.write(`\n📁 Раздел «${section}» — в разработке.\n\n`)
                 continue
             }
 
-            this.output.write('❌ Неверный пункт. Выберите 1–7 или 0.\n\n')
+            this.output.write('❌ Неверный пункт. Выберите 1–8 или 0.\n\n')
         }
     }
 
@@ -233,6 +242,7 @@ class ModerationConsole {
         this.output.write('5. Модераторы\n')
         this.output.write('6. История разработки\n')
         this.output.write('7. Тикеты\n')
+        this.output.write('8. Радио\n')
         this.output.write('0. Выход.\n')
     }
 
@@ -1633,6 +1643,214 @@ class ModerationConsole {
         const text = quoted ? quoted[1].trim() : rest
 
         return { command: 'reply', number: Number(replyMatch[1]), text }
+    }
+
+    // ── Радио (рассылки) ──────────────────────────────────────────────────────
+
+    async showRadioList(account) {
+        if (!this.broadcastRepository || !this.broadcastService) {
+            this.output.write('\n❌ Не подключён сервис рассылок (broadcastService/broadcastRepository).\n\n')
+            return
+        }
+
+        await this.paginate(account, {
+            perPage: this.BROADCASTS_PER_PAGE,
+            fetchTotal: () => this.broadcastRepository.countAll(),
+            fetchPage: (limit, offset) => this.broadcastRepository.getPage(limit, offset),
+            render: (acc, page, totalPages, total, entries, offset) =>
+                this.renderRadioPage(acc, page, totalPages, total, entries, offset),
+            handleCommand: async (input, { pageItems, offset }) => {
+                const readMatch = input.match(/^read\s+(\d+)$/i)
+
+                if (readMatch) {
+                    await this.showRadioCard(Number(readMatch[1]), pageItems, offset)
+                    return
+                }
+
+                if (/^radio\b/i.test(input)) {
+                    await this.createBroadcast(account, input)
+                    return
+                }
+
+                this.output.write('❌ Неверная команда. Доступно: read N | radio @user ... | < | > | update | 0.\n')
+            }
+        })
+    }
+
+    renderRadioPage(account, page, totalPages, total, entries, offset) {
+        const border = '='.repeat(40)
+        this.output.write(`\n${border}\n`)
+        this.output.write('=== IdeologyDatingBot | Radio ===\n')
+        this.output.write(`${border}\n`)
+        this.output.write(`Админ: ${account.name}\n`)
+        this.output.write(`Страница: ${page}/${totalPages} | Всего: ${total}\n\n`)
+
+        if (entries.length === 0) {
+            this.output.write('Рассылок пока нет.\n\n')
+        } else {
+            entries.forEach((entry, index) => {
+                const num = offset + index + 1
+                const created = this.formatDateTime(entry.created_at)
+                const status = this.broadcastStatusLabel(entry)
+                const audience = this.broadcastService.describeAudience(entry)
+
+                this.output.write(`[${num}] ${created} | ${entry.author || '—'} | ${audience} | ${status}\n`)
+            })
+        }
+
+        this.output.write('\nНавигация:\n')
+        this.output.write('<  — предыдущая страница | >  — следующая страница | 0 — главное меню\n')
+        this.output.write('read N — открыть рассылку\n')
+        this.output.write('radio @user [f|m] [город,город|global] [возраст_от|--] [возраст_до] — создать рассылку\n')
+    }
+
+    broadcastStatusLabel(broadcast) {
+        return broadcast.status === 'sent' ? 'отправлена' : 'ожидает'
+    }
+
+    // Находит рассылку по сквозному номеру из списка (нумерация как в других вкладках).
+    async resolveBroadcastByNumber(number, entries, offset) {
+        if (!Number.isInteger(number) || number < 1) {
+            return null
+        }
+
+        const index = number - offset - 1
+
+        if (index >= 0 && index < entries.length) {
+            return entries[index]
+        }
+
+        const rows = await this.broadcastRepository.getPage(1, number - 1)
+
+        return rows[0] || null
+    }
+
+    // read N — карточка рассылки: кто, когда, кому и что отправил.
+    async showRadioCard(number, entries, offset) {
+        const broadcast = await this.resolveBroadcastByNumber(number, entries, offset)
+
+        if (!broadcast) {
+            this.output.write('❌ Нет рассылки с таким номером.\n')
+            return
+        }
+
+        while (true) {
+            this.renderBroadcastDetails(broadcast)
+            this.output.write('0 — назад к списку рассылок\n')
+
+            const input = (await this.ask('\nВведите команду: ')).trim()
+
+            if (input === '0') {
+                return
+            }
+
+            this.output.write('❌ Неверная команда. Доступно: 0 — назад.\n')
+        }
+    }
+
+    renderBroadcastDetails(broadcast) {
+        const border = '='.repeat(40)
+
+        this.output.write(`\n${border}\n`)
+        this.output.write(`=== Рассылка #${broadcast.id} ===\n`)
+        this.output.write(`${border}\n`)
+        this.output.write(`Создал: ${broadcast.author || '—'}\n`)
+        this.output.write(`Создана: ${this.formatDateTime(broadcast.created_at)}\n`)
+        this.output.write(`Модератор: ${this.describeParty(broadcast.moderator_username, broadcast.moderator_chat_id)}\n`)
+        this.output.write(`Аудитория: ${this.broadcastService.describeAudience(broadcast)}\n`)
+        this.output.write(`Статус: ${this.broadcastStatusLabel(broadcast)}\n`)
+
+        if (broadcast.status === 'sent') {
+            this.output.write(`Получателей: ${broadcast.total} | доставлено: ${broadcast.sent_count} | ошибок: ${broadcast.failed_count}\n`)
+            this.output.write(`Отправлена: ${this.formatDateTime(broadcast.sent_at)}\n`)
+        }
+
+        if (broadcast.photo_file_id) {
+            this.output.write('Вложение: картинка\n')
+        }
+
+        this.output.write(`\nТекст рассылки:\n${broadcast.content_text || '—'}\n`)
+        this.output.write('\n')
+    }
+
+    // Команда radio — создаёт запись рассылки и просит назначенного модератора написать пост.
+    // Ник модератора сверяется с анкетами: у пользователя должны быть права модератора.
+    async createBroadcast(account, input) {
+        const parsed = this.broadcastService.parseRadioCommand(input)
+
+        if (!parsed.ok) {
+            if (parsed.error === 'username') {
+                this.output.write('❌ Укажите ник модератора первым: radio @user ...\n')
+            } else if (parsed.error === 'age') {
+                this.output.write('❌ Возраст должен быть числом от 1 до 120.\n')
+            } else {
+                this.output.write('❌ Формат: radio @user [f|m] [город,город|global] [возраст_от|--] [возраст_до]\n')
+            }
+            return
+        }
+
+        let target = null
+
+        if (this.userRepository) {
+            const candidates = await this.userRepository.findByUsername(parsed.username)
+            const activeIDs = (await this.activeModeratorChatIDs()).map(String)
+            target = candidates.find(user => activeIDs.includes(String(user.chatID))) || null
+        }
+
+        if (!target) {
+            this.output.write(`❌ Модератор @${parsed.username} не найден среди активных модераторов.\n`)
+            return
+        }
+
+        if (!(await this.confirmActionPin(account))) {
+            return
+        }
+
+        if (!this.notifier) {
+            this.output.write('❌ Не подключён Telegram-клиент (notifier) — сообщение модератору не отправить.\n')
+            return
+        }
+
+        const cities = parsed.cities.length > 0 ? parsed.cities.join(',') : null
+        const broadcast = await this.broadcastRepository.create({
+            author: account.name,
+            moderatorChatID: target.chatID,
+            moderatorUsername: target.username || parsed.username,
+            gender: parsed.gender,
+            cities,
+            isGlobal: parsed.isGlobal,
+            ageFrom: parsed.ageFrom,
+            ageTo: parsed.ageTo
+        })
+
+        if (!broadcast) {
+            this.output.write('❌ Не удалось создать запись рассылки.\n')
+            return
+        }
+
+        const audience = this.broadcastService.describeAudience(broadcast)
+
+        const text = '📣 Вам поручено написать рассылку.\n\n' +
+            `Аудитория: ${audience}\n\n` +
+            'Нажмите «Написать», чтобы начать. Затем введите ваш admin-ключ 1 — после него всё, что вы ' +
+            'напишете боту (текст и/или картинка), станет постом рассылки. Отправку подтверждает admin-ключ 2.'
+
+        try {
+            await this.notifier.sendMessage(target.chatID, text, {
+                reply_markup: {
+                    inline_keyboard: [[
+                        { text: '✍️ Написать', callback_data: `radio_write_${broadcast.id}` }
+                    ]]
+                }
+            })
+        } catch (error) {
+            this.output.write(`❌ Не удалось отправить сообщение модератору: ${error.message}\n`)
+            this.output.write('ℹ️  Модератор должен хотя бы раз запустить бота (/start).\n')
+            return
+        }
+
+        this.output.write(`✅ Рассылка #${broadcast.id} создана. Аудитория: ${audience}.\n`)
+        this.output.write(`📨 Запрос отправлен модератору @${target.username || parsed.username} (${target.chatID}).\n`)
     }
 
     // «@username (chat_id)» либо «без username (chat_id)».

@@ -9,12 +9,14 @@ const ModeratorService = require('./services/ModeratorService')
 const ReportService = require('./services/ReportService')
 const SupportTicketService = require('./services/SupportTicketService')
 const DevHistoryService = require('./services/DevHistoryService')
+const BroadcastService = require('./services/BroadcastService')
 const User = require('./models/user')
 const UserRepository = require('./repositories/UserRepository')
 const ModerationActionRepository = require('./repositories/ModerationActionRepository')
 const ModeratorRepository = require('./repositories/ModeratorRepository')
 const ReportRepository = require('./repositories/ReportRepository')
 const SupportTicketRepository = require('./repositories/SupportTicketRepository')
+const BroadcastRepository = require('./repositories/BroadcastRepository')
 const { parseModeratorIDs } = require('./config/moderators')
 const { db, initDatabase } = require('./database')
 
@@ -135,6 +137,10 @@ async function main() {
     const supportTicketRepository = new SupportTicketRepository(db)
     const supportTicketService = new SupportTicketService(supportTicketRepository)
 
+    // Рассылки («Радио»): консоль создаёт задание и просит модератора написать пост.
+    const broadcastRepository = new BroadcastRepository(db)
+    const broadcastService = new BroadcastService({ broadcastRepository })
+
     const devHistoryService = new DevHistoryService()
 
     const moderatorService = new ModeratorService(moderatorRepository)
@@ -161,7 +167,9 @@ async function main() {
         moderationActionRepository,
         moderatorService,
         supportTicketService,
-        devHistoryService
+        devHistoryService,
+        broadcastService,
+        broadcastRepository
     })
 
     let ok = false

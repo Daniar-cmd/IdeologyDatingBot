@@ -8,6 +8,7 @@ const ModeratorRepository = require('./repositories/ModeratorRepository')
 const MessageRepository = require('./repositories/MessageRepository')
 const SupportTicketRepository = require('./repositories/SupportTicketRepository')
 const ReferralRepository = require('./repositories/ReferralRepository')
+const BroadcastRepository = require('./repositories/BroadcastRepository')
 
 const RegistrationService = require('./services/RegistrationService')
 const LikeService = require('./services/LikeService')
@@ -20,6 +21,7 @@ const CityService = require('./services/CityService')
 const ContentFilter = require('./services/ContentFilter')
 const SupportTicketService = require('./services/SupportTicketService')
 const ReferralService = require('./services/ReferralService')
+const BroadcastService = require('./services/BroadcastService')
 
 const MessageHandler = require('./handlers/MessageHandler')
 const { parseModeratorIDs } = require('./config/moderators')
@@ -49,6 +51,7 @@ class Bot {
         this.messageRepository = new MessageRepository(db)
         this.supportTicketRepository = new SupportTicketRepository(db)
         this.referralRepository = new ReferralRepository(db)
+        this.broadcastRepository = new BroadcastRepository(db)
 
         this.likeService = new LikeService(this.users)
         this.cityService = new CityService()
@@ -70,6 +73,11 @@ class Bot {
         this.moderatorService = new ModeratorService(this.moderatorRepository)
         this.supportTicketService = new SupportTicketService(this.supportTicketRepository)
         this.referralService = new ReferralService(this.referralRepository)
+        this.broadcastService = new BroadcastService({
+            broadcastRepository: this.broadcastRepository,
+            users: this.users,
+            cityService: this.cityService
+        })
 
         this.moderatorChatIDs = parseModeratorIDs(process.env.MODERATORSID || process.env.REPORT_CHAT_IDS)
 
@@ -88,7 +96,8 @@ class Bot {
             this.userRepository,
             this.messageService,
             this.supportTicketService,
-            this.referralService
+            this.referralService,
+            this.broadcastService
         )
 
         this.saveInterval = null

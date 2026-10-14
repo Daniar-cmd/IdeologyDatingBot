@@ -2,7 +2,7 @@ const ReportService = require('../services/ReportService')
 const ImageModerationService = require('../services/ImageModerationService')
 
 class MessageHandler {
-    constructor(bot, users, registrationService, profileService, matchingService, likeService, cityService, reportService, moderatorChatIDs = [], moderatorService = null, imageModerationService = null, userRepository = null, messageService = null, supportTicketService = null, referralService = null) {
+    constructor(bot, users, registrationService, profileService, matchingService, likeService, cityService, reportService, moderatorChatIDs = [], moderatorService = null, imageModerationService = null, userRepository = null, messageService = null, supportTicketService = null, referralService = null, broadcastService = null) {
         this.bot = bot;
         this.users = users;
         this.registrationService = registrationService;
@@ -18,6 +18,7 @@ class MessageHandler {
         this.messageService = messageService;
         this.supportTicketService = supportTicketService;
         this.referralService = referralService;
+        this.broadcastService = broadcastService;
         // Username бота для реферальных ссылок (/ref). Задаётся из Bot после getMe.
         this.botUsername = null;
 
@@ -32,6 +33,11 @@ class MessageHandler {
         // Ожидание ввода кода приглашения в модераторы:
         // { [chatID]: { attempts, username, name } }
         this.inviteStates = {};
+
+        // Состояние написания рассылки в чате модератора:
+        // { [chatID]: { broadcastID, step, attempts, contentText, photoFileID } }
+        // Шаги: pin1 → content (модератор пишет пост) → pin2 (подтверждение).
+        this.radioStates = {};
 
         // Время на весь разбор жалобы: от ввода ключа 1 до финального решения
         this.moderationTimeoutMs = 90 * 1000;
@@ -464,6 +470,228 @@ ${user.description || ''}`;
         }
 
         return true;
+    }
+
+    // ── Рассылки («Радио») ────────────────────────────────────────────────────
+
+    endRadio(chatID) {
+        delete this.radioStates[chatID];
+    }
+
+    // Нажатие «Написать»: проверяем, что рассылка ждёт и назначена этому модератору.
+    async startRadioBroadcast(chatID, broadcastID) {
+        const repository = this.broadcastService ? this.broadcastService.broadcastRepository : null;
+
+        if (!repository) {
+            await this.sendMessage(chatID, '❌ Рассылки временно недоступны.').catch(() => {});
+            return;
+        }
+
+        if (this.moderationStates[chatID]) {
+            await this.sendMessage(chatID, '⛔ Сначала завершите разбор жалобы.').catch(() => {});
+            return;
+        }
+
+        const broadcast = await repository.findByID(broadcastID).catch(() => null);
+
+        if (!broadcast || broadcast.status !== 'pending') {
+            await this.sendMessage(chatID, '❌ Рассылка недоступна или уже отправлена.').catch(() => {});
+            return;
+        }
+
+        if (String(broadcast.moderator_chat_id) !== String(chatID)) {
+            await this.sendMessage(chatID, '❌ Эта рассылка назначена другому модератору.').catch(() => {});
+            return;
+        }
+
+        this.radioStates[chatID] = {
+            broadcastID: broadcast.id,
+            step: 'pin1',
+            attempts: 0,
+            contentText: null,
+            photoFileID: null
+        };
+
+        const audience = this.broadcastService.describeAudience(broadcast);
+
+        await this.sendMessage(
+            chatID,
+            `📣 Рассылка #${broadcast.id}. Аудитория: ${audience}.\n\n🔐 Введите admin pin ключ 1:`
+        ).catch(() => {});
+    }
+
+    // Возвращает true, если сообщение обработано как часть написания рассылки.
+    async handleRadioMessage(chatID, msg) {
+        const state = this.radioStates[chatID];
+
+        if (!state) {
+            return false;
+        }
+
+        const text = msg.text;
+        const photo = Array.isArray(msg.photo) && msg.photo.length > 0
+            ? msg.photo[msg.photo.length - 1].file_id
+            : null;
+        const caption = msg.caption;
+
+        if (state.step === 'pin1') {
+            if (!text) {
+                await this.sendMessage(chatID, '❌ Введите pin ключ текстом.');
+                return true;
+            }
+
+            if (text.trim().startsWith('/')) {
+                await this.sendMessage(chatID, '⛔ Отмена недоступна.\n\n🔐 Введите admin pin ключ 1:');
+                return true;
+            }
+
+            if (text.trim() !== this.getModeratorPin(chatID, 1)) {
+                state.attempts = (state.attempts || 0) + 1;
+
+                if (state.attempts >= this.maxKeyAttempts) {
+                    this.endRadio(chatID);
+                    await this.lockoutModerator(chatID, 1);
+                    return true;
+                }
+
+                await this.sendMessage(
+                    chatID,
+                    `❌ Неверный admin pin ключ 1. Осталось попыток: ${this.maxKeyAttempts - state.attempts}.`
+                );
+                return true;
+            }
+
+            await this.deleteModeratorKeyMessage(chatID, msg.message_id);
+
+            state.step = 'content';
+            state.attempts = 0;
+
+            await this.sendMessage(
+                chatID,
+                '✍️ Напишите пост рассылки: текст и/или картинку. После этого потребуется admin pin ключ 2.'
+            );
+            return true;
+        }
+
+        if (state.step === 'content') {
+            const contentText = typeof text === 'string' && text.trim()
+                ? text.trim()
+                : (caption ? String(caption).trim() : null);
+
+            if (!photo && !contentText) {
+                await this.sendMessage(chatID, '✍️ Отправьте текст и/или картинку поста.');
+                return true;
+            }
+
+            if (!photo && contentText.startsWith('/')) {
+                await this.sendMessage(chatID, '✍️ Текст не должен начинаться с «/». Напишите пост рассылки.');
+                return true;
+            }
+
+            state.contentText = contentText || null;
+            state.photoFileID = photo;
+            state.step = 'pin2';
+            state.attempts = 0;
+
+            await this.sendMessage(chatID, '🔐 Введите admin pin ключ 2 для отправки рассылки:');
+            return true;
+        }
+
+        if (state.step === 'pin2') {
+            if (!text) {
+                await this.sendMessage(chatID, '❌ Введите pin ключ текстом.');
+                return true;
+            }
+
+            if (text.trim().startsWith('/')) {
+                await this.sendMessage(chatID, '⛔ Отмена недоступна.\n\n🔐 Введите admin pin ключ 2:');
+                return true;
+            }
+
+            if (text.trim() !== this.getModeratorPin(chatID, 2)) {
+                state.attempts = (state.attempts || 0) + 1;
+
+                if (state.attempts >= this.maxKeyAttempts) {
+                    this.endRadio(chatID);
+                    await this.lockoutModerator(chatID, 2);
+                    return true;
+                }
+
+                await this.sendMessage(
+                    chatID,
+                    `❌ Неверный admin pin ключ 2. Осталось попыток: ${this.maxKeyAttempts - state.attempts}.`
+                );
+                return true;
+            }
+
+            await this.deleteModeratorKeyMessage(chatID, msg.message_id);
+            await this.applyBroadcast(chatID);
+            return true;
+        }
+
+        return true;
+    }
+
+    // Отправляет написанный пост выбранной аудитории и помечает рассылку отправленной.
+    async applyBroadcast(chatID) {
+        const state = this.radioStates[chatID];
+
+        if (!state) {
+            return;
+        }
+
+        const repository = this.broadcastService ? this.broadcastService.broadcastRepository : null;
+        const broadcastID = state.broadcastID;
+        const contentText = state.contentText;
+        const photoFileID = state.photoFileID;
+
+        if (!repository) {
+            this.endRadio(chatID);
+            await this.sendMessage(chatID, '❌ Рассылки временно недоступны.').catch(() => {});
+            return;
+        }
+
+        const broadcast = await repository.findByID(broadcastID).catch(() => null);
+
+        if (!broadcast || broadcast.status !== 'pending') {
+            this.endRadio(chatID);
+            await this.sendMessage(chatID, '❌ Рассылка уже недоступна.').catch(() => {});
+            return;
+        }
+
+        // Контент берём из состояния: в БД он ещё не записан.
+        const payload = {
+            ...broadcast,
+            content_text: contentText,
+            photo_file_id: photoFileID
+        };
+
+        this.endRadio(chatID);
+
+        await this.sendMessage(chatID, '📤 Отправляю рассылку...').catch(() => {});
+
+        let result = { total: 0, sent: 0, failed: 0 };
+
+        try {
+            result = await this.broadcastService.sendToAudience(this.bot, payload);
+        } catch (error) {
+            await this.sendMessage(chatID, `❌ Ошибка рассылки: ${error.message}`).catch(() => {});
+            return;
+        }
+
+        await repository.markSent(broadcast.id, {
+            contentText,
+            photoFileID,
+            total: result.total,
+            sent: result.sent,
+            failed: result.failed
+        }).catch(() => {});
+
+        await this.sendMessage(
+            chatID,
+            `✅ Рассылка #${broadcast.id} отправлена.\n` +
+            `Получателей: ${result.total} | доставлено: ${result.sent} | ошибок: ${result.failed}`
+        ).catch(() => {});
     }
 
     async applyModerationVerdict(chatID) {
@@ -1299,6 +1527,15 @@ Telegram: ${currentUsername}`
                     }
                 }
 
+                // Написание рассылки модератором (pin1 → пост → pin2)
+                if (this.radioStates[chatID]) {
+                    const consumed = await this.handleRadioMessage(chatID, msg);
+
+                    if (consumed) {
+                        return;
+                    }
+                }
+
                 // Ввод кода приглашения в модераторы (до проверки на бан)
                 if (this.inviteStates[chatID]) {
                     const consumed = await this.handleModeratorInviteText(chatID, text);
@@ -2059,6 +2296,13 @@ Telegram: ${currentUsername}`
                         return;
                     }
 
+                    if (this.radioStates[chatID]) {
+                        await this.bot.answerCallbackQuery(query.id, {
+                            text: 'Сначала завершите рассылку.'
+                        });
+                        return;
+                    }
+
                     const report = await this.reportService.getReport(reportID);
 
                     if (!report) {
@@ -2094,6 +2338,37 @@ Telegram: ${currentUsername}`
                         chatID,
                         '🔐 Введите admin pin ключ 1 для просмотра анкеты:'
                     );
+                    return;
+                }
+
+                if (data.startsWith('radio_write_')) {
+                    if (!this.isModeratorChat(chatID)) {
+                        await this.bot.answerCallbackQuery(query.id, { text: '⛔ Нет доступа.' });
+                        return;
+                    }
+
+                    const frozenUntil = await this.getModeratorFreezeUntil(chatID);
+
+                    if (frozenUntil) {
+                        await this.bot.answerCallbackQuery(query.id, {
+                            text: `🚫 Аккаунт заморожен до ${frozenUntil.toLocaleString('ru-RU')}.`
+                        });
+                        return;
+                    }
+
+                    const broadcastID = Number(data.replace('radio_write_', ''));
+
+                    if (!Number.isInteger(broadcastID)) {
+                        await this.bot.answerCallbackQuery(query.id, { text: 'Неизвестное действие.' });
+                        return;
+                    }
+
+                    await this.bot.editMessageReplyMarkup(
+                        { inline_keyboard: [] },
+                        { chat_id: chatID, message_id: query.message.message_id }
+                    ).catch(() => {});
+                    await this.bot.answerCallbackQuery(query.id, { text: 'Введите admin pin ключ 1.' });
+                    await this.startRadioBroadcast(chatID, broadcastID);
                     return;
                 }
 
