@@ -99,6 +99,23 @@ class UserRepository {
         return user
     }
 
+    // Поиск анкет по @username (без учёта регистра, ведущие @ игнорируются).
+    // Нужен консоли, чтобы по нику найти назначенного модератора рассылки.
+    async findByUsername(username) {
+        const value = String(username || '').trim().replace(/^@+/, '')
+
+        if (!value) {
+            return []
+        }
+
+        const result = await this.db.query(
+            'SELECT * FROM users WHERE LOWER(username) = LOWER($1)',
+            [value]
+        )
+
+        return result.rows.map(row => this.mapRow(row))
+    }
+
     // Общее число анкет — для пагинации консольной панели.
     async countAll() {
         const result = await this.db.query('SELECT COUNT(*)::int AS count FROM users')

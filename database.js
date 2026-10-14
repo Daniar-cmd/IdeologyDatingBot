@@ -204,6 +204,32 @@ async function initDatabase() {
             ON referrals (referrer_chat_id)
         `)
 
+        // Рассылки («Радио»). Консоль создаёт запись со статусом pending и
+        // фильтром аудитории; назначенный модератор пишет пост (текст и/или
+        // фото) в Telegram, подтверждает ключом 2 — тогда бот рассылает пост
+        // получателям и записывает сюда итоги (status = sent).
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS broadcasts (
+                id SERIAL PRIMARY KEY,
+                author TEXT,
+                moderator_chat_id TEXT,
+                moderator_username TEXT,
+                gender TEXT,
+                cities TEXT,
+                is_global BOOLEAN DEFAULT FALSE,
+                age_from INTEGER,
+                age_to INTEGER,
+                status TEXT DEFAULT 'pending',
+                content_text TEXT,
+                photo_file_id TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                sent_at TIMESTAMPTZ,
+                total INTEGER DEFAULT 0,
+                sent_count INTEGER DEFAULT 0,
+                failed_count INTEGER DEFAULT 0
+            )
+        `)
+
     } catch (error) {
         console.error('Ошибка инициализации PostgreSQL:')
         console.error(error.message)
