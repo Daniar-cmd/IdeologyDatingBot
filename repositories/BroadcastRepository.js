@@ -88,6 +88,40 @@ class BroadcastRepository {
 
         return result.rows[0] || null
     }
+
+    // Ожидающие рассылки, о которых бот ещё не сообщил назначенному модератору.
+    // Сообщение отправляет бот: консоль может работать без доступа к api.telegram.org.
+    async listPendingUnnotified() {
+        const result = await this.db.query(`
+            SELECT * FROM broadcasts
+            WHERE status = 'pending' AND notified = FALSE
+            ORDER BY created_at ASC NULLS LAST, id ASC
+        `)
+
+        return result.rows
+    }
+
+    // Атомарно «забирает» рассылку под отправку запроса: строка вернётся
+    // только одному отправителю, поэтому приглашение не уйдёт дважды.
+    async claimNotification(id) {
+        const result = await this.db.query(`
+            UPDATE broadcasts
+            SET notified = TRUE
+            WHERE id = $1 AND status = 'pending' AND notified = FALSE
+            RETURNING *
+        `, [Number(id)])
+
+        return result.rows[0] || null
+    }
+
+    // Возвращает рассылку в очередь отправки, если отправка не удалась.
+    async releaseNotification(id) {
+        await this.db.query(`
+            UPDATE broadcasts
+            SET notified = FALSE
+            WHERE id = $1 AND status = 'pending'
+        `, [Number(id)])
+    }
 }
 
 module.exports = BroadcastRepository

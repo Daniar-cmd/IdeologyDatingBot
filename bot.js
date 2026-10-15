@@ -111,6 +111,7 @@ class Bot {
         this.syncingModeration = false
         this.refreshingModerators = false
         this.deliveringInvites = false
+        this.deliveringRadioTasks = false
         this.botUsername = null
     }
 
@@ -332,6 +333,52 @@ class Bot {
         }
     }
 
+    // Отправляет назначенным модераторам запрос «Написать» по рассылкам,
+    // созданным в консоли (та тоже может быть без доступа к api.telegram.org).
+    async deliverPendingRadioTasks() {
+        if (this.deliveringRadioTasks || !this.broadcastService) {
+            return
+        }
+
+        this.deliveringRadioTasks = true
+
+        try {
+            const broadcasts = await this.broadcastService.listPendingUnnotified()
+
+            for (const broadcast of broadcasts) {
+                const chatID = Number(broadcast.moderator_chat_id)
+
+                if (!Number.isInteger(chatID)) {
+                    continue
+                }
+
+                const claimed = await this.broadcastService.claimNotification(broadcast.id)
+
+                if (!claimed) {
+                    continue
+                }
+
+                const message = this.broadcastService.radioTaskMessage(broadcast)
+
+                try {
+                    await this.bot.sendMessage(chatID, message.text, message.options)
+                    console.log(`[Радио] запрос на рассылку #${broadcast.id} отправлен: ${chatID}`)
+                } catch (error) {
+                    console.error(`Не удалось отправить задание на рассылку #${broadcast.id}:`, error.message)
+
+                    const permanent = /chat not found|blocked|deactivated|initiate|not enough rights|bot was kicked/i
+                        .test(error.message || '')
+
+                    if (!permanent) {
+                        await this.broadcastService.releaseNotification(broadcast.id)
+                    }
+                }
+            }
+        } finally {
+            this.deliveringRadioTasks = false
+        }
+    }
+
     startAutoSave() {
         this.saveInterval = setInterval(() => {
             this.saveAllUsers().catch(error => {
@@ -357,10 +404,15 @@ class Bot {
             })
         }, MODERATOR_REFRESH_INTERVAL_MS)
 
-        // Доставка приглашений в модераторы, созданных в консоли.
+        // Доставка исходящих задач, созданных в консоли: приглашения в
+        // модераторы и запросы на рассылку («Радио»).
         this.inviteInterval = setInterval(() => {
             this.deliverPendingInvites().catch(error => {
                 console.error('Ошибка отправки приглашений:', error)
+            })
+
+            this.deliverPendingRadioTasks().catch(error => {
+                console.error('Ошибка отправки заданий на рассылку:', error)
             })
         }, INVITE_DELIVERY_INTERVAL_MS)
     }
@@ -418,10 +470,15 @@ class Bot {
 
             console.log('Бот запущен!')
 
-            // Сразу доставляем приглашения, которые могли быть созданы, пока бот
-            // был выключен (их хранит таблица moderator_invites).
+            // Сразу доставляем приглашения и задания на рассылку, которые могли
+            // быть созданы, пока бот был выключен (таблицы moderator_invites и
+            // broadcasts).
             this.deliverPendingInvites().catch(error => {
                 console.error('Ошибка отправки приглашений:', error)
+            })
+
+            this.deliverPendingRadioTasks().catch(error => {
+                console.error('Ошибка отправки заданий на рассылку:', error)
             })
 
         } catch (error) {

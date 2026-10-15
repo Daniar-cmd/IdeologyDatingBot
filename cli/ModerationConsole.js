@@ -1798,11 +1798,6 @@ class ModerationConsole {
             return
         }
 
-        if (!this.notifier) {
-            this.output.write('❌ Не подключён Telegram-клиент (notifier) — сообщение модератору не отправить.\n')
-            return
-        }
-
         const cities = parsed.cities.length > 0 ? parsed.cities.join(',') : null
         const broadcast = await this.broadcastRepository.create({
             author: account.name,
@@ -1822,27 +1817,10 @@ class ModerationConsole {
 
         const audience = this.broadcastService.describeAudience(broadcast)
 
-        const text = '📣 Вам поручено написать рассылку.\n\n' +
-            `Аудитория: ${audience}\n\n` +
-            'Нажмите «Написать», чтобы начать. Затем введите ваш admin-ключ 1 — после него всё, что вы ' +
-            'напишете боту (текст и/или картинка), станет постом рассылки. Отправку подтверждает admin-ключ 2.'
-
-        try {
-            await this.notifier.sendMessage(target.chatID, text, {
-                reply_markup: {
-                    inline_keyboard: [[
-                        { text: '✍️ Написать', callback_data: `radio_write_${broadcast.id}` }
-                    ]]
-                }
-            })
-        } catch (error) {
-            this.output.write(`❌ Не удалось отправить сообщение модератору: ${error.message}\n`)
-            this.output.write('ℹ️  Модератор должен хотя бы раз запустить бота (/start).\n')
-            return
-        }
-
+        // Запрос «Написать» модератору отправляет бот: консоль может работать на
+        // машине без доступа к api.telegram.org (см. Bot#deliverPendingRadioTasks).
         this.output.write(`✅ Рассылка #${broadcast.id} создана. Аудитория: ${audience}.\n`)
-        this.output.write(`📨 Запрос отправлен модератору @${target.username || parsed.username} (${target.chatID}).\n`)
+        this.output.write(`📨 Запрос отправит бот модератору @${target.username || parsed.username} (${target.chatID}) в течение нескольких секунд.\n`)
     }
 
     // «@username (chat_id)» либо «без username (chat_id)».

@@ -187,6 +187,51 @@ class BroadcastService {
 
     // ─────────────────────────── Аудитория и отправка ───────────────────────────
 
+    // Ожидающие рассылки, о которых бот ещё не сообщил назначенному модератору.
+    async listPendingUnnotified() {
+        if (!this.broadcastRepository) {
+            return []
+        }
+
+        return this.broadcastRepository.listPendingUnnotified()
+    }
+
+    // Атомарно забирает рассылку под отправку запроса (true вернётся один раз).
+    async claimNotification(id) {
+        if (!this.broadcastRepository) {
+            return null
+        }
+
+        return this.broadcastRepository.claimNotification(id)
+    }
+
+    // Возвращает рассылку в очередь отправки после неудачной попытки.
+    async releaseNotification(id) {
+        if (!this.broadcastRepository) {
+            return null
+        }
+
+        return this.broadcastRepository.releaseNotification(id)
+    }
+
+    // Сообщение-задание назначенному модератору: текст и кнопка «Написать».
+    // Отправляет бот (консоль может быть без доступа к api.telegram.org).
+    radioTaskMessage(broadcast) {
+        return {
+            text: '📣 Вам поручено написать рассылку.\n\n' +
+                `Аудитория: ${this.describeAudience(broadcast)}\n\n` +
+                'Нажмите «Написать», чтобы начать. Затем введите ваш admin-ключ 1 — после него всё, что вы ' +
+                'напишете боту (текст и/или картинка), станет постом рассылки. Отправку подтверждает admin-ключ 2.',
+            options: {
+                reply_markup: {
+                    inline_keyboard: [[
+                        { text: '✍️ Написать', callback_data: `radio_write_${broadcast.id}` }
+                    ]]
+                }
+            }
+        }
+    }
+
     cityKey(value) {
         if (value === null || value === undefined || value === '') {
             return ''

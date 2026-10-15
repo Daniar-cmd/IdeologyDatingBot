@@ -228,6 +228,7 @@ async function initDatabase() {
                 age_from INTEGER,
                 age_to INTEGER,
                 status TEXT DEFAULT 'pending',
+                notified BOOLEAN NOT NULL DEFAULT FALSE,
                 content_text TEXT,
                 photo_file_id TEXT,
                 created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -236,6 +237,13 @@ async function initDatabase() {
                 sent_count INTEGER DEFAULT 0,
                 failed_count INTEGER DEFAULT 0
             )
+        `)
+
+        // Дозаполняем колонку в уже существующих базах. notified — бот уже
+        // отправил назначенному модератору запрос «Написать».
+        await db.query(`
+            ALTER TABLE broadcasts
+            ADD COLUMN IF NOT EXISTS notified BOOLEAN NOT NULL DEFAULT FALSE
         `)
 
     } catch (error) {
