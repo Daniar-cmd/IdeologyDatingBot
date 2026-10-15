@@ -1,9 +1,32 @@
 const { Pool } = require('pg')
+const { resolveRuntime } = require('./config/runtime')
 
-const db = new Pool({
-    connectionString: process.env.DATABASE_URL,
+// Режим окружения (боевой/тестовый) и изоляция данных описаны в config/runtime.js.
+const runtime = resolveRuntime()
+
+// Имя схемы подставляется в SQL как идентификатор (параметризовать нельзя),
+// поэтому допускаем только безопасный набор символов.
+function safeSchema(name) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+        throw new Error(`Недопустимое имя схемы БД: ${name}`)
+    }
+
+    return name
+}
+
+const poolConfig = {
+    connectionString: runtime.databaseUrl,
     connectionTimeoutMillis: 5000
-})
+}
+
+if (runtime.schema) {
+    // Тестовый контур живёт в отдельной схеме той же БД: все
+    // неквалифицированные таблицы создаются и читаются только там,
+    // поэтому боевые данные (схема public) не задеваются.
+    poolConfig.options = `-c search_path=${safeSchema(runtime.schema)}`
+}
+
+const db = new Pool(poolConfig)
 
 db.on('error', error => {
     console.error('Ошибка пула PostgreSQL:', error.message)
@@ -11,9 +34,20 @@ db.on('error', error => {
 
 async function initDatabase() {
 
+    if (!runtime.databaseUrl) {
+        throw new Error(runtime.mode === 'test'
+            ? 'В .env не задан TEST_DATABASE_URL или DATABASE_URL'
+            : 'В .env не задан DATABASE_URL')
+    }
+
     try {
         // Проверяем, что база данных доступна
         await db.query('SELECT 1')
+
+        // В тестовом режиме создаём изолированную схему, если её ещё нет.
+        if (runtime.schema) {
+            await db.query(`CREATE SCHEMA IF NOT EXISTS ${safeSchema(runtime.schema)}`)
+        }
 
         // Создаём таблицу, если её ещё нет
         await db.query(`
@@ -253,4 +287,4 @@ async function initDatabase() {
     }
 }
 
-module.exports = { db, initDatabase }
+module.exports = { db, initDatabase, runtime }

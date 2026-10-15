@@ -3,11 +3,13 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "dev": "nodemon index.js",
+    "dev": "BOT_ENV=test nodemon index.js",
     "start": "node index.js",
+    "start:test": "BOT_ENV=test node index.js",
     "console": "node console.js",
     "moderation": "node moderation.js",
-    "admin": "node moderation.js"
+    "admin": "node moderation.js",
+    "admin:test": "BOT_ENV=test node moderation.js"
   },
   "keywords": [],
   "author": "",

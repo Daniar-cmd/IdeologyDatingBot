@@ -25,6 +25,7 @@ const BroadcastService = require('./services/BroadcastService')
 
 const MessageHandler = require('./handlers/MessageHandler')
 const { parseModeratorIDs } = require('./config/moderators')
+const { resolveRuntime } = require('./config/runtime')
 
 // Интервалы фоновых задач. Модерацию и список модераторов опрашиваем реже:
 // изменения из консоли — редкие ручные действия, а полный SELECT по users на
@@ -39,11 +40,18 @@ const INVITE_DELIVERY_INTERVAL_MS = 5000
 
 class Bot {
     constructor() {
-        if (!process.env.BOT_TOKEN) {
-            throw new Error('Не найден BOT_TOKEN в файле .env')
+        const runtime = resolveRuntime()
+
+        if (!runtime.botToken) {
+            throw new Error(runtime.mode === 'test'
+                ? 'Не найден TEST_BOT_TOKEN в файле .env (режим BOT_ENV=test)'
+                : 'Не найден BOT_TOKEN в файле .env')
         }
 
-        this.bot = new TelegramApi(process.env.BOT_TOKEN, {
+        this.mode = runtime.mode
+        this.dbSchema = runtime.schema
+
+        this.bot = new TelegramApi(runtime.botToken, {
             polling: false
         })
 
@@ -461,6 +469,11 @@ class Bot {
 
             // Узнаём username бота, чтобы строить реферальные ссылки.
             await this.loadBotUsername()
+
+            // Печатаем контур, чтобы не спутать тестового и боевого бота.
+            const modeLabel = this.mode === 'test' ? 'ТЕСТОВЫЙ' : 'БОЕВОЙ'
+            const where = this.dbSchema ? `схема БД ${this.dbSchema}` : 'схема БД public'
+            console.log(`Режим: ${modeLabel} — @${this.botUsername || '?'} (${where})`)
 
             this.registerCommands()
             this.messageHandler.register()

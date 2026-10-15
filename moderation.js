@@ -18,6 +18,7 @@ const ReportRepository = require('./repositories/ReportRepository')
 const SupportTicketRepository = require('./repositories/SupportTicketRepository')
 const BroadcastRepository = require('./repositories/BroadcastRepository')
 const { parseModeratorIDs } = require('./config/moderators')
+const { resolveRuntime } = require('./config/runtime')
 const { db, initDatabase } = require('./database')
 
 // Формат: MODERATOR_ACCOUNTS=имя:пароль:telegramID, имя2:пароль2:telegramID
@@ -85,16 +86,27 @@ function resolveAccounts() {
 // Отправка уведомлений пользователям из консоли. Поллинг отключён,
 // чтобы не конфликтовать с основным процессом бота (ошибка 409 Conflict).
 function createNotifier() {
-    if (!process.env.BOT_TOKEN) {
+    // Клиент использует тот же токен, что и запущенный бот: в тестовом режиме
+    // это TEST_BOT_TOKEN, иначе боевой BOT_TOKEN.
+    const { botToken } = resolveRuntime()
+
+    if (!botToken) {
         return null
     }
 
     try {
-        return new TelegramApi(process.env.BOT_TOKEN, { polling: false })
+        return new TelegramApi(botToken, { polling: false })
     } catch (error) {
         console.error('⚠️  Не удалось создать Telegram-клиент для уведомлений:', error.message)
         return null
     }
+}
+
+// Короткая метка контура в шапке консоли, чтобы не спутать тест с боем.
+function runtimeLabel() {
+    const { mode, schema } = resolveRuntime()
+
+    return `${mode === 'test' ? 'ТЕСТОВЫЙ' : 'БОЕВОЙ'}${schema ? ` / схема ${schema}` : ''}`
 }
 
 async function main() {
@@ -106,6 +118,7 @@ async function main() {
 
     // Диагностика без входа и без БД: npm run admin -- --list
     if (name === '--list' || name === '--moderators' || name === 'list') {
+        console.log('Контур:', runtimeLabel())
         console.log('MODERATOR_ACCOUNTS:', process.env.MODERATOR_ACCOUNTS ? 'задана' : 'НЕ ЗАДАНА')
         console.log('Настроено аккаунтов администраторов:', accounts.length)
 
@@ -127,6 +140,8 @@ async function main() {
     }
 
     await initDatabase()
+
+    console.log('Контур:', runtimeLabel())
 
     const userRepository = new UserRepository(db, User)
     const moderationActionRepository = new ModerationActionRepository(db)
