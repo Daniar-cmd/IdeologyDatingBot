@@ -141,16 +141,24 @@ async function initDatabase() {
             )
         `)
 
-        // Приглашения в модераторы (одно активное приглашение на пользователя)
+        // Приглашения в модераторы (одно активное приглашение на пользователя).
+        // notified — бот уже отправил приглашённому сообщение с кнопками.
         await db.query(`
             CREATE TABLE IF NOT EXISTS moderator_invites (
                 chat_id TEXT PRIMARY KEY,
                 invite_code TEXT NOT NULL,
                 invited_by TEXT,
                 status TEXT DEFAULT 'pending',
+                notified BOOLEAN NOT NULL DEFAULT FALSE,
                 created_at TIMESTAMPTZ DEFAULT NOW(),
                 resolved_at TIMESTAMPTZ
             )
+        `)
+
+        // Дозаполняем колонку в уже существующих базах.
+        await db.query(`
+            ALTER TABLE moderator_invites
+            ADD COLUMN IF NOT EXISTS notified BOOLEAN NOT NULL DEFAULT FALSE
         `)
 
         // Логи действий модерации (консоль + Telegram)

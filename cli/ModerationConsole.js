@@ -1203,8 +1203,10 @@ class ModerationConsole {
         this.output.write('<  — предыдущая страница | >  — следующая страница | 0 — главное меню\n')
     }
 
-    // Команда invite — приглашение в модераторы. Код печатается здесь и передаётся
-    // пользователю; сообщение с кнопками шлёт тот же клиент, что и уведомления.
+    // Команда invite — приглашение в модераторы. Консоль создаёт приглашение в БД
+    // и печатает код; сообщение с кнопками отправляет бот (см. Bot#deliverPendingInvites).
+    // Так приглашение доходит, даже если консоль запущена на машине без доступа
+    // к api.telegram.org (локально при боте на сервере).
     async inviteModerator(account, chatID, entries) {
         if (!Number.isInteger(chatID) || chatID <= 0) {
             this.output.write('❌ Некорректный chat_id.\n')
@@ -1225,29 +1227,7 @@ class ModerationConsole {
         const code = await this.moderatorService.createInvite(chatID, account.name)
 
         this.output.write(`✅ Приглашение создано для ${chatID}.\nКод (передайте пользователю): ${code}\n`)
-
-        if (!this.notifier) {
-            this.output.write('⚠️  Telegram-клиент недоступен — приглашение сохранено, но сообщение не отправлено.\n')
-            return
-        }
-
-        const text = '🔔 Вас пригласили стать модератором IdeologyDatingBot.\n\n' +
-            'Если вы согласны, нажмите «✅ Принять» и введите 4-значный код, который передал администратор.'
-
-        try {
-            await this.notifier.sendMessage(chatID, text, {
-                reply_markup: {
-                    inline_keyboard: [[
-                        { text: '✅ Принять', callback_data: 'mod_invite_accept' },
-                        { text: '❌ Отказаться', callback_data: 'mod_invite_decline' }
-                    ]]
-                }
-            })
-            this.output.write('📨 Приглашение отправлено в Telegram.\n')
-        } catch (error) {
-            this.output.write(`❌ Не удалось отправить приглашение (chat_id ${chatID}): ${error.message}\n`)
-            this.output.write('ℹ️  Пользователь должен запустить бота (/start) и не блокировать его.\n')
-        }
+        this.output.write('📨 Сообщение с кнопками отправит бот (в течение нескольких секунд).\n')
     }
 
     async removeModerator(account, target) {

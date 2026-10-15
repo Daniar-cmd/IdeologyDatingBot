@@ -65,6 +65,37 @@ class ModeratorService {
         return this.moderatorRepository.listPendingInvites()
     }
 
+    // Приглашения, которые бот ещё не доставил приглашённому.
+    async listPendingUnnotifiedInvites() {
+        return this.moderatorRepository.listPendingUnnotifiedInvites()
+    }
+
+    // Атомарно забирает приглашение под отправку (true вернётся один раз).
+    async claimInviteNotification(chatID) {
+        return this.moderatorRepository.claimInviteNotification(chatID)
+    }
+
+    // Возвращает приглашение в очередь отправки после неудачной попытки.
+    async releaseInviteNotification(chatID) {
+        return this.moderatorRepository.releaseInviteNotification(chatID)
+    }
+
+    // Текст приглашения и кнопки — общие для отправителя (бот в Telegram).
+    inviteMessage() {
+        return {
+            text: '🔔 Вас пригласили стать модератором IdeologyDatingBot.\n\n' +
+                'Если вы согласны, нажмите «✅ Принять» и введите 4-значный код, который передал администратор.',
+            options: {
+                reply_markup: {
+                    inline_keyboard: [[
+                        { text: '✅ Принять', callback_data: 'mod_invite_accept' },
+                        { text: '❌ Отказаться', callback_data: 'mod_invite_decline' }
+                    ]]
+                }
+            }
+        }
+    }
+
     async listActiveModerators() {
         return this.moderatorRepository.listActiveModerators()
     }

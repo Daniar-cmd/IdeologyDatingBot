@@ -102,12 +102,13 @@ class ModeratorRepository {
 
     async setInvite(chatID, { code, invitedBy = null }) {
         const result = await this.db.query(
-            `INSERT INTO moderator_invites (chat_id, invite_code, invited_by, status, created_at, resolved_at)
-             VALUES ($1, $2, $3, 'pending', NOW(), NULL)
+            `INSERT INTO moderator_invites (chat_id, invite_code, invited_by, status, notified, created_at, resolved_at)
+             VALUES ($1, $2, $3, 'pending', FALSE, NOW(), NULL)
              ON CONFLICT (chat_id) DO UPDATE SET
                 invite_code = EXCLUDED.invite_code,
                 invited_by = EXCLUDED.invited_by,
                 status = 'pending',
+                notified = FALSE,
                 created_at = NOW(),
                 resolved_at = NULL
              RETURNING *`,
@@ -144,6 +145,43 @@ class ModeratorRepository {
         )
 
         return result.rows
+    }
+
+    // Активные приглашения, о которых бот ещё не сообщил приглашённому.
+    // Именно их доставляет бот: консоль может работать на машине без доступа
+    // к api.telegram.org, поэтому отправку сообщения берёт на себя сервер.
+    async listPendingUnnotifiedInvites() {
+        const result = await this.db.query(
+            `SELECT * FROM moderator_invites
+             WHERE status = 'pending' AND notified = FALSE
+             ORDER BY created_at ASC NULLS LAST`
+        )
+
+        return result.rows
+    }
+
+    // Атомарно «забирает» приглашение под отправку: строка вернётся только
+    // одному отправителю, поэтому сообщение не уйдёт дважды.
+    async claimInviteNotification(chatID) {
+        const result = await this.db.query(
+            `UPDATE moderator_invites
+             SET notified = TRUE
+             WHERE chat_id = $1 AND status = 'pending' AND notified = FALSE
+             RETURNING *`,
+            [String(chatID)]
+        )
+
+        return result.rows[0] || null
+    }
+
+    // Возвращает приглашение в очередь отправки, если отправка не удалась.
+    async releaseInviteNotification(chatID) {
+        await this.db.query(
+            `UPDATE moderator_invites
+             SET notified = FALSE
+             WHERE chat_id = $1 AND status = 'pending'`,
+            [String(chatID)]
+        )
     }
 }
 

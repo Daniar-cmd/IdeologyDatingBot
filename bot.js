@@ -32,6 +32,10 @@ const { parseModeratorIDs } = require('./config/moderators')
 const AUTOSAVE_INTERVAL_MS = 5000
 const MODERATION_SYNC_INTERVAL_MS = 10000
 const MODERATOR_REFRESH_INTERVAL_MS = 30000
+// Приглашения в модераторы создаёт консоль (возможно, на машине без доступа к
+// api.telegram.org), а сообщение с кнопками отправляет бот. Опрос частый:
+// приглашения — редкие ручные действия, зато сообщение приходит почти сразу.
+const INVITE_DELIVERY_INTERVAL_MS = 5000
 
 class Bot {
     constructor() {
@@ -103,8 +107,10 @@ class Bot {
         this.saveInterval = null
         this.moderationInterval = null
         this.moderatorInterval = null
+        this.inviteInterval = null
         this.syncingModeration = false
         this.refreshingModerators = false
+        this.deliveringInvites = false
         this.botUsername = null
     }
 
@@ -275,6 +281,57 @@ class Bot {
         }
     }
 
+    // Отправляет приглашения в модераторы, созданные консолью. Консоль может
+    // работать на машине без доступа к api.telegram.org (например, локально при
+    // боте на сервере), поэтому сообщение с кнопками отправляет именно бот.
+    async deliverPendingInvites() {
+        if (this.deliveringInvites || !this.moderatorService) {
+            return
+        }
+
+        this.deliveringInvites = true
+
+        try {
+            const invites = await this.moderatorService.listPendingUnnotifiedInvites()
+
+            for (const invite of invites) {
+                const chatID = Number(invite.chat_id)
+
+                if (!Number.isInteger(chatID)) {
+                    continue
+                }
+
+                // Забираем приглашение атомарно: если его уже взял другой тик,
+                // claim вернёт null и отправку пропускаем.
+                const claimed = await this.moderatorService.claimInviteNotification(chatID)
+
+                if (!claimed) {
+                    continue
+                }
+
+                const message = this.moderatorService.inviteMessage()
+
+                try {
+                    await this.bot.sendMessage(chatID, message.text, message.options)
+                    console.log(`[Модерация] приглашение отправлено: ${chatID}`)
+                } catch (error) {
+                    console.error(`Не удалось отправить приглашение ${chatID}:`, error.message)
+
+                    // Постоянные причины (нет чата, бот заблокирован, диалог не
+                    // начат) повторять бессмысленно, временные — вернём в очередь.
+                    const permanent = /chat not found|blocked|deactivated|initiate|not enough rights|bot was kicked/i
+                        .test(error.message || '')
+
+                    if (!permanent) {
+                        await this.moderatorService.releaseInviteNotification(chatID)
+                    }
+                }
+            }
+        } finally {
+            this.deliveringInvites = false
+        }
+    }
+
     startAutoSave() {
         this.saveInterval = setInterval(() => {
             this.saveAllUsers().catch(error => {
@@ -299,6 +356,13 @@ class Bot {
                 console.error('Ошибка обновления модераторов:', error)
             })
         }, MODERATOR_REFRESH_INTERVAL_MS)
+
+        // Доставка приглашений в модераторы, созданных в консоли.
+        this.inviteInterval = setInterval(() => {
+            this.deliverPendingInvites().catch(error => {
+                console.error('Ошибка отправки приглашений:', error)
+            })
+        }, INVITE_DELIVERY_INTERVAL_MS)
     }
 
     registerCommands() {
@@ -353,6 +417,12 @@ class Bot {
             await this.bot.startPolling()
 
             console.log('Бот запущен!')
+
+            // Сразу доставляем приглашения, которые могли быть созданы, пока бот
+            // был выключен (их хранит таблица moderator_invites).
+            this.deliverPendingInvites().catch(error => {
+                console.error('Ошибка отправки приглашений:', error)
+            })
 
         } catch (error) {
             console.error('❌ Ошибка запуска бота:', error)
