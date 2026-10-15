@@ -9,7 +9,8 @@
     "console": "node console.js",
     "moderation": "node moderation.js",
     "admin": "node moderation.js",
-    "admin:test": "BOT_ENV=test node moderation.js"
+    "admin:test": "BOT_ENV=test node moderation.js",
+    "beta:codes": "node scripts/generate-beta-codes.js"
   },
   "keywords": [],
   "author": "",

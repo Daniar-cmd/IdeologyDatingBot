@@ -2,7 +2,7 @@ const ReportService = require('../services/ReportService')
 const ImageModerationService = require('../services/ImageModerationService')
 
 class MessageHandler {
-    constructor(bot, users, registrationService, profileService, matchingService, likeService, cityService, reportService, moderatorChatIDs = [], moderatorService = null, imageModerationService = null, userRepository = null, messageService = null, supportTicketService = null, referralService = null, broadcastService = null) {
+    constructor(bot, users, registrationService, profileService, matchingService, likeService, cityService, reportService, moderatorChatIDs = [], moderatorService = null, imageModerationService = null, userRepository = null, messageService = null, supportTicketService = null, referralService = null, broadcastService = null, betaAccessService = null) {
         this.bot = bot;
         this.users = users;
         this.registrationService = registrationService;
@@ -19,6 +19,8 @@ class MessageHandler {
         this.supportTicketService = supportTicketService;
         this.referralService = referralService;
         this.broadcastService = broadcastService;
+        // Доступ в закрытый тестовый бот по бета-кодам (в боевом режиме — null).
+        this.betaAccessService = betaAccessService;
         // Username бота для реферальных ссылок (/ref). Задаётся из Bot после getMe.
         this.botUsername = null;
 
@@ -929,6 +931,40 @@ ${user.description || ''}`;
         ].join('\n');
     }
 
+    // Приветствие закрытого тестового бота: доступ только по бета-коду.
+    betaWelcomeText() {
+        return [
+            '🔒 Это закрытый тестовый бот.',
+            '',
+            'Чтобы получить доступ, введите код бета-тестера: 16 символов',
+            '(цифры и латинские буквы в нижнем регистре). Каждый код действует один раз.'
+        ].join('\n');
+    }
+
+    // Обрабатывает сообщение пользователя без доступа к тестовому боту:
+    // показывает приветствие или пытается погасить введённый бета-код.
+    async handleBetaGate(chatID, msg) {
+        const text = typeof msg.text === 'string' ? msg.text.trim() : '';
+
+        // Команды и не-текст — показываем приглашение ввести код.
+        if (!text || text.startsWith('/')) {
+            await this.sendMessage(chatID, this.betaWelcomeText());
+            return;
+        }
+
+        const result = await this.betaAccessService.claim(text, chatID);
+
+        if (!result.ok) {
+            await this.sendMessage(chatID, `❌ ${result.message}\n\n${this.betaWelcomeText()}`);
+            return;
+        }
+
+        // Код принят — дальше обычный первый заход (приветствие и анкета).
+        await this.sendMessage(chatID, '✅ Код принят! Добро пожаловать в бету. Давайте создадим анкету.');
+        this.registrationService.startRegistration(chatID, msg.from?.username || null);
+        await this.sendMessage(chatID, this.consentText(), this.consentKeyboard());
+    }
+
     // Клавиатура на шаге ввода причины репорта: можно отменить.
     reportCancelKeyboard() {
         return this.cancelKeyboard();
@@ -1548,6 +1584,19 @@ Telegram: ${currentUsername}`
                 // Сообщения забаненных пользователей не принимаются
                 if (user?.banned) {
                     return;
+                }
+
+                // Закрытый тестовый бот: без действующего бета-кода доступ
+                // закрыт (модераторы проходят всегда). Включается только в
+                // тестовом контуре (BOT_ENV=test).
+                if (this.betaAccessService && this.betaAccessService.enabled &&
+                    !this.isModeratorChat(chatID)) {
+                    const hasAccess = await this.betaAccessService.hasAccess(chatID);
+
+                    if (!hasAccess) {
+                        await this.handleBetaGate(chatID, msg);
+                        return;
+                    }
                 }
 
                 if (user?.waitingForAge &&
@@ -2205,6 +2254,19 @@ Telegram: ${currentUsername}`
                         text: '⛔ Вы забанены.'
                     }).catch(() => {});
                     return;
+                }
+
+                // Закрытый тестовый бот: без бета-кода кнопки недоступны.
+                if (this.betaAccessService && this.betaAccessService.enabled &&
+                    !this.isModeratorChat(chatID)) {
+                    const hasAccess = await this.betaAccessService.hasAccess(chatID);
+
+                    if (!hasAccess) {
+                        await this.bot.answerCallbackQuery(query.id, {
+                            text: '🔒 Введите код бета-тестера.'
+                        }).catch(() => {});
+                        return;
+                    }
                 }
 
                 // Приглашение в модераторы: принять / отказаться

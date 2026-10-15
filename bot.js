@@ -1,3 +1,4 @@
+const path = require('path')
 const TelegramApi = require('node-telegram-bot-api')
 const { db, initDatabase } = require('./database')
 
@@ -9,6 +10,7 @@ const MessageRepository = require('./repositories/MessageRepository')
 const SupportTicketRepository = require('./repositories/SupportTicketRepository')
 const ReferralRepository = require('./repositories/ReferralRepository')
 const BroadcastRepository = require('./repositories/BroadcastRepository')
+const BetaCodeRepository = require('./repositories/BetaCodeRepository')
 
 const RegistrationService = require('./services/RegistrationService')
 const LikeService = require('./services/LikeService')
@@ -22,6 +24,7 @@ const ContentFilter = require('./services/ContentFilter')
 const SupportTicketService = require('./services/SupportTicketService')
 const ReferralService = require('./services/ReferralService')
 const BroadcastService = require('./services/BroadcastService')
+const BetaAccessService = require('./services/BetaAccessService')
 
 const MessageHandler = require('./handlers/MessageHandler')
 const { parseModeratorIDs } = require('./config/moderators')
@@ -64,6 +67,7 @@ class Bot {
         this.supportTicketRepository = new SupportTicketRepository(db)
         this.referralRepository = new ReferralRepository(db)
         this.broadcastRepository = new BroadcastRepository(db)
+        this.betaCodeRepository = new BetaCodeRepository(db)
 
         this.likeService = new LikeService(this.users)
         this.cityService = new CityService()
@@ -91,6 +95,21 @@ class Bot {
             cityService: this.cityService
         })
 
+        // Закрытый доступ по бета-кодам: только в тестовом контуре.
+        // Коды читаются из файла (BETA_CODES_FILE, по умолчанию beta_codes.txt).
+        this.betaAccessService = null
+
+        if (runtime.mode === 'test') {
+            const codesFile = process.env.BETA_CODES_FILE || path.join(__dirname, 'beta_codes.txt')
+            const codes = BetaAccessService.readCodesFile(codesFile)
+
+            this.betaAccessService = new BetaAccessService({
+                betaCodeRepository: this.betaCodeRepository,
+                codes,
+                enabled: true
+            })
+        }
+
         this.moderatorChatIDs = parseModeratorIDs(process.env.MODERATORSID || process.env.REPORT_CHAT_IDS)
 
         this.messageHandler = new MessageHandler(
@@ -109,7 +128,8 @@ class Bot {
             this.messageService,
             this.supportTicketService,
             this.referralService,
-            this.broadcastService
+            this.broadcastService,
+            this.betaAccessService
         )
 
         this.saveInterval = null
@@ -454,6 +474,19 @@ class Bot {
         try {
 
             await initDatabase()
+
+            // Бета-коды тестового бота: регистрируем коды файла в БД и печатаем
+            // статистику, чтобы сразу видеть, сколько мест ещё свободно.
+            if (this.betaAccessService) {
+                const added = await this.betaAccessService.seed()
+                const stats = await this.betaAccessService.stats()
+
+                console.log(`Бета-доступ: включён (кодов: ${stats.total}, использовано: ${stats.used}${added ? `, новых: ${added}` : ''})`)
+
+                if (stats.total === 0) {
+                    console.warn('⚠️  Файл бета-кодов пуст — вход в бота закрыт (см. beta_codes.txt).')
+                }
+            }
 
             await this.refreshModerators()
 

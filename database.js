@@ -280,6 +280,19 @@ async function initDatabase() {
             ADD COLUMN IF NOT EXISTS notified BOOLEAN NOT NULL DEFAULT FALSE
         `)
 
+        // Бета-доступ к закрытому тестовому боту. Таблица нужна только в
+        // тестовом контуре (собственная схема), боевую базу не трогаем.
+        if (runtime.mode === 'test') {
+            await db.query(`
+                CREATE TABLE IF NOT EXISTS beta_codes (
+                    code TEXT PRIMARY KEY,
+                    used_by TEXT,
+                    used_at TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            `)
+        }
+
     } catch (error) {
         console.error('Ошибка инициализации PostgreSQL:')
         console.error(error.message)
