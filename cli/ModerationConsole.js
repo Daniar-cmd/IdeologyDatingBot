@@ -1113,7 +1113,19 @@ class ModerationConsole {
                 const inviteMatch = input.match(/^invite\s+(-?\d+)$/i)
 
                 if (inviteMatch) {
-                    await this.inviteModerator(account, parseInt(inviteMatch[1], 10), all)
+                    const value = parseInt(inviteMatch[1], 10)
+
+                    // Как и у remove: число может быть chat_id, а может — номером
+                    // строки списка (список показывает «[N] chat_id»). Сначала ищем
+                    // запись по chat_id, затем по номеру строки; если ни то, ни
+                    // другое — считаем число chat_id нового пользователя.
+                    const byID = all.find(entry => entry.chatID === value)
+                    const byRow = Number.isInteger(value) && value >= 1 && value <= all.length
+                        ? all[value - 1]
+                        : null
+                    const targetID = byID ? byID.chatID : (byRow ? byRow.chatID : value)
+
+                    await this.inviteModerator(account, targetID, all)
                     return
                 }
 
@@ -1233,8 +1245,8 @@ class ModerationConsole {
             })
             this.output.write('📨 Приглашение отправлено в Telegram.\n')
         } catch (error) {
-            this.output.write(`❌ Не удалось отправить приглашение: ${error.message}\n`)
-            this.output.write('ℹ️  Пользователь должен хотя бы раз запустить бота (/start).\n')
+            this.output.write(`❌ Не удалось отправить приглашение (chat_id ${chatID}): ${error.message}\n`)
+            this.output.write('ℹ️  Пользователь должен запустить бота (/start) и не блокировать его.\n')
         }
     }
 
