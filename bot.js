@@ -100,7 +100,7 @@ class Bot {
         this.betaAccessService = null
 
         if (runtime.mode === 'test') {
-            const codesFile = process.env.BETA_CODES_FILE || path.join(__dirname, 'beta_codes.txt')
+            const codesFile = process.env.BETA_CODES_FILE || path.join(__dirname, 'txt', 'beta_codes.txt')
             const codes = BetaAccessService.readCodesFile(codesFile)
 
             this.betaAccessService = new BetaAccessService({

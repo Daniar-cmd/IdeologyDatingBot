@@ -7,7 +7,7 @@ const BetaAccessService = require('../services/BetaAccessService')
 // уже существующие. Если файла нет — создаёт его с заголовком.
 // Запуск: npm run beta:codes -- 20   (без числа — 99 кодов).
 const count = Number(process.argv[2]) || 99
-const filePath = process.env.BETA_CODES_FILE || path.resolve(__dirname, '..', 'beta_codes.txt')
+const filePath = process.env.BETA_CODES_FILE || path.resolve(__dirname, '..', 'txt', 'beta_codes.txt')
 
 const HEADER = [
     '# Бета-коды тестового бота. Один код — один вход.',
